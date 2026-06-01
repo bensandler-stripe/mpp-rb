@@ -143,6 +143,24 @@ class TestParsing < Minitest::Test
     end
   end
 
+  def test_parse_authorization_rejects_non_string_challenge_method_ids
+    non_string_payment_method_ids.each do |payment_method|
+      payload = {
+        "challenge" => {
+          "id" => "test-id",
+          "realm" => "api.example.com",
+          "method" => payment_method,
+          "intent" => "charge",
+          "request" => "e30"
+        },
+        "payload" => {"type" => "hash", "hash" => "0xabc"}
+      }
+      header = "Payment #{Mpp::Parsing.b64_encode(payload)}"
+
+      assert_raises(Mpp::ParseError) { Mpp::Credential.from_authorization(header) }
+    end
+  end
+
   def test_receipt_roundtrip
     receipt = Mpp::Receipt.new(
       status: "success",
@@ -186,6 +204,20 @@ class TestParsing < Minitest::Test
 
   def test_parse_payment_receipt_rejects_invalid_method_ids
     invalid_payment_method_ids.each do |payment_method|
+      payload = {
+        "status" => "success",
+        "timestamp" => "2026-01-15T12:00:30Z",
+        "reference" => "0xabc123",
+        "method" => payment_method
+      }
+      header = Mpp::Parsing.b64_encode(payload)
+
+      assert_raises(Mpp::ParseError) { Mpp::Receipt.from_payment_receipt(header) }
+    end
+  end
+
+  def test_parse_payment_receipt_rejects_non_string_method_ids
+    non_string_payment_method_ids.each do |payment_method|
       payload = {
         "status" => "success",
         "timestamp" => "2026-01-15T12:00:30Z",
@@ -292,5 +324,9 @@ class TestParsing < Minitest::Test
 
   def invalid_payment_method_ids
     ["Tempo", "tempo2", "tempo-pay", "tempo_pay", "tempo.pay"]
+  end
+
+  def non_string_payment_method_ids
+    [true, false]
   end
 end

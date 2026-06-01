@@ -155,7 +155,7 @@ module Mpp
       Kernel.raise Mpp::ParseError, "Credential challenge must be an object" unless challenge_data.is_a?(Hash)
       Kernel.raise Mpp::ParseError, "Credential challenge missing required field: id" unless challenge_data.key?("id")
 
-      method = (challenge_data["method"] || "").to_s
+      method = challenge_data["method"]
       validate_payment_method_id(method)
 
       echo = Mpp::ChallengeEcho.new(
@@ -223,7 +223,7 @@ module Mpp
       Kernel.raise Mpp::ParseError, "Invalid receipt status" unless status == "success"
 
       timestamp = parse_timestamp(data["timestamp"].to_s)
-      method = data["method"].to_s
+      method = data["method"]
       validate_payment_method_id(method)
 
       extra = data["extra"]
