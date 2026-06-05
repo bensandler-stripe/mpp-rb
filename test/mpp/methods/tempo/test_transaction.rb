@@ -10,6 +10,7 @@ class TestTempoTransaction < Minitest::Test
   end
 
   CURRENCY = "0x20c0000000000000000000000000000000000000"
+  DISALLOWED_FEE_TOKEN = "0x20c0000000000000000000000000000000000001"
   RECIPIENT = "0x742d35Cc6634c0532925a3b844bC9e7595F8fE00"
   ACCOUNT = "0x1234567890abcdef1234567890abcdef12345678"
 
@@ -181,6 +182,36 @@ class TestTempoTransaction < Minitest::Test
     assert_equal access_list, decoded[5]
     assert_equal 3, decoded[11].length
     assert_equal 65, decoded[13].bytesize
+  end
+
+  def test_charge_intent_rejects_non_allowlisted_fee_token
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    payer = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
+    fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
+    raw_tx, = Mpp::Methods::Tempo::Transaction.build_signed_transfer(
+      account: payer,
+      chain_id: 42_431,
+      gas_limit: 1_000_000,
+      gas_price: 1,
+      nonce: 0,
+      nonce_key: (1 << 256) - 1,
+      currency: CURRENCY,
+      transfer_data: transfer_data,
+      valid_before: Time.now.to_i + 60,
+      awaiting_fee_payer: true
+    )
+    intent = Mpp::Methods::Tempo::ChargeIntent.new
+    Mpp::Methods::Tempo.tempo(
+      intents: {"charge" => intent},
+      fee_payer: fee_payer,
+      fee_payer_allowed_fee_tokens: [CURRENCY]
+    )
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, DISALLOWED_FEE_TOKEN)
+    end
+    assert_includes error.message, "not allowed by fee payer policy"
   end
 
   private
