@@ -298,6 +298,11 @@ module Mpp
           )
           raise Mpp::VerificationError, "Proof signature does not match source" unless valid
 
+          if @store
+            store_key = "mpp:proof:#{credential.challenge.id}"
+            raise Mpp::VerificationError, "Proof credential has already been used" unless @store.put_if_absent(store_key, true)
+          end
+
           Mpp::Receipt.success(credential.challenge.id)
         end
 
