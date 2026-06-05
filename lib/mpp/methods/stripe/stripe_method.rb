@@ -15,6 +15,12 @@ module Mpp
         def initialize(secret_key:, network_id:, payment_methods: nil,
           metadata: nil, currency: Defaults::DEFAULT_CURRENCY,
           decimals: Defaults::DEFAULT_DECIMALS)
+          unless payment_methods.is_a?(Array) &&
+              payment_methods.any? &&
+              payment_methods.all? { |type| type.is_a?(String) && !type.strip.empty? }
+            raise ArgumentError, "payment_methods must be a non-empty array of Stripe payment method type strings"
+          end
+
           @name = "stripe"
           @secret_key = secret_key
           @network_id = network_id
@@ -32,7 +38,7 @@ module Mpp
           method_details = {} unless method_details.is_a?(Hash)
 
           method_details["networkId"] = @network_id
-          method_details["paymentMethods"] = @payment_methods if @payment_methods
+          method_details["paymentMethodTypes"] = @payment_methods
           method_details["metadata"] = @metadata if @metadata
 
           request.merge("methodDetails" => method_details)

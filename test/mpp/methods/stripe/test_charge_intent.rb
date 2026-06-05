@@ -34,13 +34,16 @@ class TestStripeChargeIntent < Minitest::Test
     Mpp::Credential.new(challenge: echo, payload: payload)
   end
 
-  def make_request(amount: "100", currency: "usd", method_details: nil)
+  def make_request(amount: "100", currency: "usd", payment_method_types: ["card"], method_details: nil)
     req = {
       "amount" => amount,
       "currency" => currency,
       "recipient" => "acct_test123"
     }
-    req["methodDetails"] = method_details if method_details
+    details = {}
+    details["paymentMethodTypes"] = payment_method_types unless payment_method_types.nil?
+    details.merge!(method_details) if method_details
+    req["methodDetails"] = details unless details.empty?
     req
   end
 
@@ -71,11 +74,20 @@ class TestStripeChargeIntent < Minitest::Test
     skip "stripe gem not available" unless @stripe_available
 
     credential = make_credential(payload: {"spt" => "spt_test123", "externalId" => "ext_1"})
-    request = make_request(method_details: {"metadata" => {"order" => "123"}})
+    request = make_request(payment_method_types: ["card", "link"], method_details: {"metadata" => {"order" => "123"}})
 
     mock_result = Struct.new(:id, :status).new("pi_abc123", "succeeded")
     mock_pi = Minitest::Mock.new
-    mock_pi.expect(:create, mock_result, [Hash])
+    mock_pi.expect(:create, mock_result) do |params|
+      assert_equal 100, params[:amount]
+      assert_equal "usd", params[:currency]
+      assert_equal "spt_test123", params[:shared_payment_granted_token]
+      assert_equal true, params[:confirm]
+      assert_equal ["card", "link"], params[:payment_method_types]
+      refute params.key?(:automatic_payment_methods)
+      assert_equal({"order" => "123"}, params[:metadata])
+      true
+    end
 
     mock_v1 = Struct.new(:payment_intents).new(mock_pi)
     mock_client = Struct.new(:v1).new(mock_v1)
@@ -89,6 +101,26 @@ class TestStripeChargeIntent < Minitest::Test
     end
 
     mock_pi.verify
+  end
+
+  def test_verify_rejects_missing_payment_method_types
+    credential = make_credential(payload: {"spt" => "spt_test123"})
+    request = make_request(payment_method_types: nil)
+
+    err = assert_raises(Mpp::VerificationError) do
+      @intent.verify(credential, request)
+    end
+    assert_match(/paymentMethodTypes/, err.message)
+  end
+
+  def test_verify_rejects_empty_payment_method_types
+    credential = make_credential(payload: {"spt" => "spt_test123"})
+    request = make_request(payment_method_types: [])
+
+    err = assert_raises(Mpp::VerificationError) do
+      @intent.verify(credential, request)
+    end
+    assert_match(/paymentMethodTypes/, err.message)
   end
 
   def test_verify_rejects_failed_payment
