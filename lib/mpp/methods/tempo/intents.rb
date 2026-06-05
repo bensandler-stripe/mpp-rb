@@ -346,6 +346,37 @@ module Mpp
               "Fee payer envelope expired: valid_before (#{valid_before}) is not in the future"
           end
 
+          chain_id = int.call(decoded[0])
+          max_priority_fee_per_gas = int.call(decoded[1])
+          max_fee_per_gas = int.call(decoded[2])
+          gas_limit = int.call(decoded[3])
+          access_list = decoded[5] || Transaction::EMPTY_LIST
+          policy = FeePayerPolicy.for_chain_id(chain_id)
+
+          if gas_limit > policy.max_gas
+            raise Mpp::VerificationError, "Invalid transaction: gas limit exceeds sponsor policy"
+          end
+          if max_fee_per_gas > policy.max_fee_per_gas
+            raise Mpp::VerificationError, "Invalid transaction: max fee per gas exceeds sponsor policy"
+          end
+          if max_priority_fee_per_gas > max_fee_per_gas
+            raise Mpp::VerificationError,
+              "Invalid transaction: max priority fee per gas exceeds max fee per gas"
+          end
+          if max_priority_fee_per_gas > policy.max_priority_fee_per_gas
+            raise Mpp::VerificationError,
+              "Invalid transaction: max priority fee per gas exceeds sponsor policy"
+          end
+          if gas_limit * max_fee_per_gas > policy.max_total_fee
+            raise Mpp::VerificationError, "Invalid transaction: total fee budget exceeds sponsor policy"
+          end
+          if valid_before > Time.now.to_i + policy.max_validity_window_seconds
+            raise Mpp::VerificationError, "Invalid transaction: validity window exceeds sponsor policy"
+          end
+          unless access_list.empty?
+            raise Mpp::VerificationError, "Invalid transaction: access list is not allowed"
+          end
+
           # Build calls from decoded RLP
           calls_data = decoded[4] || []
           calls = calls_data.map do |c|
@@ -356,14 +387,16 @@ module Mpp
             )
           end
 
+          validate_fee_payer_calls(calls, request) if request
+
           # Reconstruct transaction for sender signature recovery
           tx_for_recovery = Transaction::SignedTransaction.new(
-            chain_id: int.call(decoded[0]),
-            max_priority_fee_per_gas: int.call(decoded[1]),
-            max_fee_per_gas: int.call(decoded[2]),
-            gas_limit: int.call(decoded[3]),
+            chain_id: chain_id,
+            max_priority_fee_per_gas: max_priority_fee_per_gas,
+            max_fee_per_gas: max_fee_per_gas,
+            gas_limit: gas_limit,
             calls: calls,
-            access_list: decoded[5] || Transaction::EMPTY_LIST,
+            access_list: Transaction::EMPTY_LIST,
             nonce_key: int.call(decoded[6]),
             nonce: int.call(decoded[7]),
             valid_before: int.call(decoded[8]),
@@ -398,6 +431,23 @@ module Mpp
 
           signed = tx_to_sign.with(fee_payer_signature: fee_payer_sig)
           "0x#{signed.encoded_2718.unpack1("H*")}"
+        end
+
+        def validate_fee_payer_calls(calls, request)
+          if calls.length != 1
+            raise Mpp::VerificationError, "Invalid transaction: contains unauthorized extra calls"
+          end
+
+          call = calls.first
+          if call.value && Integer(call.value) != 0
+            raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
+          end
+          unless call.to.downcase == request.currency.downcase
+            raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
+          end
+          unless match_transfer_calldata(call.data.delete_prefix("0x"), request)
+            raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
+          end
         end
       end
     end

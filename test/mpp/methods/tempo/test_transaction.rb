@@ -146,24 +146,136 @@ class TestTempoTransaction < Minitest::Test
     assert_equal 65, decoded[13].bytesize
   end
 
-  def test_charge_intent_cosigns_fee_payer_envelope_with_access_list
+  def test_charge_intent_rejects_fee_payer_envelope_with_access_list
     skip "eth/rlp gems not available" unless eth_and_rlp_available?
 
     payer = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
     fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
-    access_list = [[pack_hex(CURRENCY), [pack_hex("0x#{"00" * 32}")]]]
+    raw_tx = build_fee_payer_envelope(
+      payer: payer,
+      access_list: [[pack_hex(CURRENCY), [pack_hex("0x#{"00" * 32}")]]]
+    )
+    intent = Mpp::Methods::Tempo::ChargeIntent.new
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "access list is not allowed"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_above_gas_policy
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(gas_limit: 2_000_001)
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "gas limit exceeds sponsor policy"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_above_fee_policy
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(max_fee_per_gas: 100_000_000_001)
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "max fee per gas exceeds sponsor policy"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_above_priority_fee_policy
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(
+      max_priority_fee_per_gas: 50_000_000_001,
+      max_fee_per_gas: 60_000_000_000
+    )
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "max priority fee per gas exceeds sponsor policy"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_above_validity_window
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(valid_before: Time.now.to_i + (15 * 60) + 1)
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "validity window exceeds sponsor policy"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_with_extra_call
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    payment_call = Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_data)
+    raw_tx = build_fee_payer_envelope(calls: [payment_call, payment_call])
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "contains unauthorized extra calls"
+  end
+
+  private
+
+  def configured_fee_payer_intent
+    intent = Mpp::Methods::Tempo::ChargeIntent.new
+    fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
+    intent
+  end
+
+  def charge_request
+    Mpp::Methods::Tempo::Schemas::ChargeRequest.from_hash(
+      "amount" => "1000000",
+      "currency" => CURRENCY,
+      "recipient" => RECIPIENT,
+      "methodDetails" => {"feePayer" => true, "chainId" => 42_431}
+    )
+  end
+
+  def build_fee_payer_envelope(
+    payer: Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}"),
+    chain_id: 42_431,
+    max_priority_fee_per_gas: 1,
+    max_fee_per_gas: 1,
+    gas_limit: 1_000_000,
+    calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_data)],
+    access_list: [],
+    nonce_key: (1 << 256) - 1,
+    valid_before: Time.now.to_i + 60,
+    fee_token: nil
+  )
     tx = Mpp::Methods::Tempo::Transaction::SignedTransaction.new(
-      chain_id: 42_431,
-      max_priority_fee_per_gas: 1,
-      max_fee_per_gas: 1,
-      gas_limit: 1_000_000,
-      calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_data)],
+      chain_id: chain_id,
+      max_priority_fee_per_gas: max_priority_fee_per_gas,
+      max_fee_per_gas: max_fee_per_gas,
+      gas_limit: gas_limit,
+      calls: calls,
       access_list: access_list,
-      nonce_key: (1 << 256) - 1,
+      nonce_key: nonce_key,
       nonce: 0,
-      valid_before: Time.now.to_i + 60,
+      valid_before: valid_before,
       valid_after: nil,
-      fee_token: nil,
+      fee_token: fee_token,
       sender_signature: nil,
       fee_payer_signature: Mpp::Methods::Tempo::Transaction::EMPTY_SIGNATURE,
       sender_address: payer.address,
@@ -171,19 +283,8 @@ class TestTempoTransaction < Minitest::Test
       key_authorization: nil
     )
     sender_signature = payer.sign_hash(tx.signature_hash)
-    raw_tx = "0x#{Mpp::Methods::Tempo::FeePayer.encode(tx.with(sender_signature: sender_signature)).unpack1("H*")}"
-    intent = Mpp::Methods::Tempo::ChargeIntent.new
-    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
-
-    signed_raw = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
-    decoded = decode_raw_tx(signed_raw, 0x76)
-
-    assert_equal access_list, decoded[5]
-    assert_equal 3, decoded[11].length
-    assert_equal 65, decoded[13].bytesize
+    "0x#{Mpp::Methods::Tempo::FeePayer.encode(tx.with(sender_signature: sender_signature)).unpack1("H*")}"
   end
-
-  private
 
   def transfer_data
     to_padded = RECIPIENT.delete_prefix("0x").downcase.rjust(64, "0")
