@@ -294,6 +294,7 @@ module Mpp
             address: source[:address],
             chain_id: resolved_chain_id,
             challenge_id: credential.challenge.id,
+            realm: credential.challenge.realm,
             signature: payload.signature
           )
           raise Mpp::VerificationError, "Proof signature does not match source" unless valid

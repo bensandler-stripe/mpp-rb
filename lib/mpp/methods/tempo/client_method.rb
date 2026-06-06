@@ -92,7 +92,8 @@ module Mpp
             signature = Proof.sign(
               account: @account,
               chain_id: chain_id,
-              challenge_id: challenge.id
+              challenge_id: challenge.id,
+              realm: challenge.realm
             )
 
             return Mpp::Credential.new(
