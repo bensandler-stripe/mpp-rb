@@ -16,18 +16,20 @@ module Mpp
       # Tempo payment method implementation.
       # Handles client-side credential creation for Tempo payments.
       class TempoMethod
-        attr_reader :name, :account, :fee_payer, :root_account, :rpc_url,
-          :chain_id, :currency, :recipient, :decimals, :client_id,
+        attr_reader :name, :account, :fee_payer, :fee_payer_allowed_fee_tokens,
+          :root_account, :rpc_url, :chain_id, :currency, :recipient, :decimals, :client_id,
           :expected_recipients
         attr_accessor :intents
 
         def initialize(account: nil, fee_payer: nil, root_account: nil,
           rpc_url: Defaults::RPC_URL, chain_id: nil, currency: nil,
           recipient: nil, decimals: 6, client_id: nil,
-          expected_recipients: nil)
+          expected_recipients: nil, fee_payer_allowed_fee_tokens: nil)
           @name = "tempo"
           @account = account
           @fee_payer = fee_payer
+          @fee_payer_allowed_fee_tokens =
+            fee_payer_allowed_fee_tokens&.map { |token| token.to_s.downcase }
           @root_account = root_account
           @rpc_url = rpc_url
           @chain_id = chain_id
@@ -230,7 +232,7 @@ module Mpp
       # Factory function to create a configured TempoMethod.
       def self.tempo(intents:, account: nil, fee_payer: nil, chain_id: nil, rpc_url: nil,
         root_account: nil, currency: nil, recipient: nil, decimals: 6, client_id: nil,
-        expected_recipients: nil)
+        expected_recipients: nil, fee_payer_allowed_fee_tokens: nil)
         rpc_url ||= chain_id ? Defaults.rpc_url_for_chain(chain_id) : Defaults::RPC_URL
         currency ||= Defaults.default_currency_for_chain(chain_id)
 
@@ -244,7 +246,8 @@ module Mpp
           recipient: recipient,
           decimals: decimals,
           client_id: client_id,
-          expected_recipients: expected_recipients
+          expected_recipients: expected_recipients,
+          fee_payer_allowed_fee_tokens: fee_payer_allowed_fee_tokens
         )
 
         intents.each_value do |intent|
