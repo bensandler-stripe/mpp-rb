@@ -1,6 +1,8 @@
 # typed: strict
 # frozen_string_literal: true
 
+require "stringio"
+
 module Mpp
   module Server
     # Rack middleware that intercepts requests requiring payment.
@@ -72,7 +74,7 @@ module Mpp
         return nil unless input&.respond_to?(:read)
 
         body = T.let(input.read || "", String)
-        input.rewind if input.respond_to?(:rewind)
+        env["rack.input"] = StringIO.new(body)
         body.empty? ? nil : body
       end
     end

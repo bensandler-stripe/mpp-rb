@@ -96,6 +96,8 @@ class TestMiddleware < Minitest::Test
 
     assert_equal 402, status
     refute headers.key?("Payment-Receipt")
+    replacement = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    assert_equal Mpp::BodyDigest.compute("{\"query\":\"tampered\"}"), replacement.digest
   end
 
   def test_accepts_paid_retry_with_matching_body_digest
@@ -128,6 +130,25 @@ class TestMiddleware < Minitest::Test
     assert_equal 200, status
     assert headers.key?("Payment-Receipt")
     assert_equal [body], response_body
+  end
+
+  def test_preserves_non_rewindable_request_body_for_app
+    handler = mock_handler
+    seen_body = nil
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      seen_body = env["rack.input"].read
+      [200, {}, [env["rack.input"].read]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+    body = "{\"query\":\"paid\"}"
+
+    status, _headers, _response_body = middleware.call(
+      minimal_env.merge("rack.input" => NonRewindableInput.new(body))
+    )
+
+    assert_equal 402, status
+    assert_equal body, seen_body
   end
 
   private
@@ -164,5 +185,15 @@ class TestMiddleware < Minitest::Test
       realm: @realm,
       secret_key: @secret_key
     )
+  end
+
+  class NonRewindableInput
+    def initialize(body)
+      @input = StringIO.new(body)
+    end
+
+    def read(*args)
+      @input.read(*args)
+    end
   end
 end
