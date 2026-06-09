@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require_relative "defaults"
+require_relative "fee_payer_policy"
 require_relative "transaction"
 
 module Mpp
@@ -174,6 +175,11 @@ module Mpp
             raise TransactionError,
               "Chain ID mismatch: RPC returned #{chain_id}, expected #{expected_chain_id} from challenge"
           end
+          if awaiting_fee_payer
+            policy = FeePayerPolicy.for_chain_id(chain_id)
+            max_fee_per_gas = [gas_price, policy.max_fee_per_gas].min
+            max_priority_fee_per_gas = [gas_price, policy.max_priority_fee_per_gas].min
+          end
 
           if awaiting_fee_payer
             resolved_nonce_key = EXPIRING_NONCE_KEY
@@ -197,6 +203,8 @@ module Mpp
             chain_id: chain_id,
             gas_limit: gas_limit,
             gas_price: gas_price,
+            max_priority_fee_per_gas: max_priority_fee_per_gas,
+            max_fee_per_gas: max_fee_per_gas,
             nonce: resolved_nonce,
             nonce_key: resolved_nonce_key,
             currency: currency,

@@ -277,16 +277,14 @@ module Mpp
 
           return false unless decoded_to.downcase == request.recipient.downcase
           return false unless decoded_amount == Integer(request.amount)
+          return false if call_data_hex.length < 200
 
           if expected_memo
-            return false if call_data_hex.length < 200
-
             decoded_memo = "0x#{call_data_hex[136, 64]}"
             memo_clean = expected_memo.downcase
             memo_clean = "0x#{memo_clean}" unless memo_clean.start_with?("0x")
             return false unless decoded_memo.downcase == memo_clean
           else
-            return false if call_data_hex.length < 200
             return false unless challenge
 
             decoded_memo = "0x#{call_data_hex[136, 64]}"
