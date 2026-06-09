@@ -39,7 +39,7 @@ class TestMiddleware < Minitest::Test
   def test_attaches_receipt_on_successful_payment
     # Build a valid credential from a challenge
     handler = mock_handler
-    challenge = handler.charge(nil, "1.00")
+    challenge = handler.charge(nil, "1.00", mppx_scope: {"resource" => "/resource"})
     assert_instance_of Mpp::Challenge, challenge
 
     # Build a valid credential
@@ -64,6 +64,46 @@ class TestMiddleware < Minitest::Test
     assert_equal "no-store", headers["Cache-Control"]
     assert_vary_authorization headers
     assert_equal ["OK"], body
+  end
+
+  def test_rejects_paid_retry_with_different_auto_route_scope
+    handler = mock_handler
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      [200, {}, ["OK"]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge(
+        "PATH_INFO" => "/paid/one",
+        "QUERY_STRING" => "view=full",
+        "action_dispatch.route_uri_pattern" => "/paid/:id"
+      )
+    )
+    assert_equal 402, status
+
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    assert_equal(
+      {"route" => "/paid/:id", "resource" => "/paid/one", "query" => "view=full"},
+      challenge.request["_mppx_scope"]
+    )
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge(
+        "HTTP_AUTHORIZATION" => credential.to_authorization,
+        "PATH_INFO" => "/paid/two",
+        "QUERY_STRING" => "view=full",
+        "action_dispatch.route_uri_pattern" => "/paid/:id"
+      )
+    )
+
+    assert_equal 402, status
+    refute headers.key?("Payment-Receipt")
   end
 
   def test_rejects_paid_retry_with_tampered_body_digest

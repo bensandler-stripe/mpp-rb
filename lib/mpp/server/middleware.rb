@@ -36,6 +36,7 @@ module Mpp
 
         amount = charge_opts[:amount]
         opts = charge_opts.except(:amount, :body)
+        opts[:mppx_scope] ||= mppx_scope(env)
 
         result = @handler.charge(authorization, amount, **opts, body: request_body)
 
@@ -76,6 +77,18 @@ module Mpp
         body = T.let(input.read || "", String)
         env["rack.input"] = StringIO.new(body)
         body.empty? ? nil : body
+      end
+
+      sig { params(env: T.untyped).returns(T::Hash[String, String]) }
+      def mppx_scope(env)
+        scope = T.let({}, T::Hash[String, String])
+        route = env["action_dispatch.route_uri_pattern"] || env["sinatra.route"] || env["roda.route"]
+        scope["route"] = route if route.is_a?(String) && !route.empty?
+        path = env["PATH_INFO"]
+        scope["resource"] = path if path.is_a?(String) && !path.empty?
+        query = env["QUERY_STRING"]
+        scope["query"] = query if query.is_a?(String) && !query.empty?
+        scope
       end
     end
   end
