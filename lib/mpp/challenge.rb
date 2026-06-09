@@ -91,8 +91,8 @@ module Mpp
     end
 
     def self.each_auth_scheme_index(header, offset = 0)
-      in_quote = false
-      escaped = false
+      in_quote = T.let(false, T::Boolean)
+      escaped = T.let(false, T::Boolean)
       i = offset
 
       while i < header.length
