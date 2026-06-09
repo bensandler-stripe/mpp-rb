@@ -32,6 +32,10 @@ module Mpp
           @_method&.fee_payer
         end
 
+        def fee_payer_allowed_fee_tokens
+          @_method&.fee_payer_allowed_fee_tokens
+        end
+
         def verify(credential, request)
           req = Schemas::ChargeRequest.from_hash(request)
 
@@ -298,6 +302,11 @@ module Mpp
           )
           raise Mpp::VerificationError, "Proof signature does not match source" unless valid
 
+          if @store
+            store_key = "mpp:proof:#{credential.challenge.id}"
+            raise Mpp::VerificationError, "Proof credential has already been used" unless @store.put_if_absent(store_key, true)
+          end
+
           Mpp::Receipt.success(credential.challenge.id)
         end
 
@@ -389,6 +398,13 @@ module Mpp
           # Build the final transaction with fee_token set
           resolved_fee_token = fee_token || request&.currency
           raise Mpp::VerificationError, "No fee token available" unless resolved_fee_token
+
+          allowed_fee_tokens = fee_payer_allowed_fee_tokens ||
+            [Defaults.default_currency_for_chain(int.call(decoded[0])).downcase]
+          unless allowed_fee_tokens.map(&:downcase).include?(resolved_fee_token.downcase)
+            raise Mpp::VerificationError,
+              "Fee token #{resolved_fee_token} is not allowed by fee payer policy"
+          end
 
           tx_to_sign = tx_for_recovery.with(fee_token: resolved_fee_token)
 

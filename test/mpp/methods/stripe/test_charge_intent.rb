@@ -78,7 +78,7 @@ class TestStripeChargeIntent < Minitest::Test
 
     mock_result = Struct.new(:id, :status).new("pi_abc123", "succeeded")
     mock_pi = Minitest::Mock.new
-    mock_pi.expect(:create, mock_result) do |params|
+    mock_pi.expect(:create, mock_result) do |params, opts|
       assert_equal 100, params[:amount]
       assert_equal "usd", params[:currency]
       assert_equal "spt_test123", params[:shared_payment_granted_token]
@@ -86,6 +86,7 @@ class TestStripeChargeIntent < Minitest::Test
       assert_equal ["card", "link"], params[:payment_method_types]
       refute params.key?(:automatic_payment_methods)
       assert_equal({"order" => "123"}, params[:metadata])
+      assert_equal "mpp-stripe-charge-test-id", opts[:idempotency_key]
       true
     end
 
@@ -155,7 +156,7 @@ class TestStripeChargeIntent < Minitest::Test
     mock_last_response = Struct.new(:headers).new(mock_headers)
     mock_result = Struct.new(:id, :status, :last_response).new("pi_abc123", "succeeded", mock_last_response)
     mock_pi = Minitest::Mock.new
-    mock_pi.expect(:create, mock_result, [Hash])
+    mock_pi.expect(:create, mock_result, [Hash, {idempotency_key: "mpp-stripe-charge-test-id"}])
 
     mock_v1 = Struct.new(:payment_intents).new(mock_pi)
     mock_client = Struct.new(:v1).new(mock_v1)
@@ -176,7 +177,7 @@ class TestStripeChargeIntent < Minitest::Test
 
     mock_result = Struct.new(:id, :status).new("pi_needs3ds", "requires_action")
     mock_pi = Minitest::Mock.new
-    mock_pi.expect(:create, mock_result, [Hash])
+    mock_pi.expect(:create, mock_result, [Hash, {idempotency_key: "mpp-stripe-charge-test-id"}])
 
     mock_v1 = Struct.new(:payment_intents).new(mock_pi)
     mock_client = Struct.new(:v1).new(mock_v1)

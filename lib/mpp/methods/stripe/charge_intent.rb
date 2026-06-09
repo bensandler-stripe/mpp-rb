@@ -67,7 +67,10 @@ module Mpp
 
           begin
             client = ::Stripe::StripeClient.new(@secret_key)
-            result = client.v1.payment_intents.create(params)
+            result = client.v1.payment_intents.create(
+              params,
+              {idempotency_key: stripe_idempotency_key(credential)}
+            )
           rescue => e
             raise Mpp::VerificationError, e.message
           end
@@ -90,6 +93,12 @@ module Mpp
           end
 
           Mpp::Receipt.success(pi_id, method: "stripe", external_id: external_id)
+        end
+
+        private
+
+        def stripe_idempotency_key(credential)
+          "mpp-stripe-charge-#{credential.challenge.id}"
         end
       end
     end
