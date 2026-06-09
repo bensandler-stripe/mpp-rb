@@ -74,6 +74,95 @@ class TestTempoChargeIntent < Minitest::Test
     assert_equal HASH, result.reference
   end
 
+  def test_transaction_credential_duplicate_fetches_receipt_without_rebroadcast
+    raw_tx = "0xabcdef1234567890"
+    tx_hash = raw_transaction_hash(raw_tx)
+    challenge_id = "challenge-123"
+    memo = Mpp::Methods::Tempo::Attribution.encode(
+      server_id: REALM,
+      challenge_id: challenge_id
+    )
+    receipt_data = receipt([transfer_log(memo: memo)])
+    store = Mpp::MemoryStore.new
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test", store: store)
+    credential = transaction_credential(raw_tx, challenge_id: challenge_id)
+    calls = []
+
+    Mpp::Methods::Tempo::Rpc.stub(:call, ->(_rpc_url, method, params) {
+      calls << [method, params]
+
+      case method
+      when "eth_sendRawTransaction"
+        assert_equal [raw_tx], params
+        assert_equal tx_hash, store.get("mpp:charge:#{tx_hash.downcase}")
+        tx_hash
+      when "eth_getTransactionReceipt"
+        assert_equal [tx_hash], params
+        receipt_data
+      else
+        raise "unexpected RPC method: #{method}"
+      end
+    }) do
+      first = intent.verify(credential, request_hash)
+      second = intent.verify(credential, request_hash)
+
+      assert_equal tx_hash, first.reference
+      assert_equal tx_hash, second.reference
+    end
+
+    methods = calls.map(&:first)
+    assert_equal 1, methods.count("eth_sendRawTransaction")
+    assert_equal 2, methods.count("eth_getTransactionReceipt")
+  end
+
+  def test_transaction_credential_releases_reservation_on_broadcast_failure
+    raw_tx = "0xabcdef1234567890"
+    tx_hash = raw_transaction_hash(raw_tx)
+    challenge_id = "challenge-123"
+    memo = Mpp::Methods::Tempo::Attribution.encode(
+      server_id: REALM,
+      challenge_id: challenge_id
+    )
+    receipt_data = receipt([transfer_log(memo: memo)])
+    store = Mpp::MemoryStore.new
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test", store: store)
+    credential = transaction_credential(raw_tx, challenge_id: challenge_id)
+    fail_broadcast = true
+    calls = []
+
+    Mpp::Methods::Tempo::Rpc.stub(:call, ->(_rpc_url, method, params) {
+      calls << [method, params]
+
+      case method
+      when "eth_sendRawTransaction"
+        assert_equal [raw_tx], params
+        if fail_broadcast
+          fail_broadcast = false
+          raise "network down"
+        end
+        tx_hash
+      when "eth_getTransactionReceipt"
+        assert_equal [tx_hash], params
+        receipt_data
+      else
+        raise "unexpected RPC method: #{method}"
+      end
+    }) do
+      error = assert_raises(Mpp::VerificationError) do
+        intent.verify(credential, request_hash)
+      end
+      assert_match(/Transaction submission failed: network down/, error.message)
+      assert_nil store.get("mpp:charge:#{tx_hash.downcase}")
+
+      receipt = intent.verify(credential, request_hash)
+      assert_equal tx_hash, receipt.reference
+    end
+
+    methods = calls.map(&:first)
+    assert_equal 2, methods.count("eth_sendRawTransaction")
+    assert_equal 1, methods.count("eth_getTransactionReceipt")
+  end
+
   def test_proof_credential_replay_rejected
     account = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
     chain_id = 4217
@@ -317,6 +406,25 @@ class TestTempoChargeIntent < Minitest::Test
     Mpp::Methods::Tempo::Rpc.stub(:call, ->(_rpc_url, _method, _params) { receipt }) do
       intent.verify(credential, request_hash)
     end
+  end
+
+  def raw_transaction_hash(raw_tx)
+    require "eth"
+
+    "0x#{Eth::Util.keccak256([raw_tx.delete_prefix("0x")].pack("H*")).unpack1("H*")}"
+  end
+
+  def transaction_credential(raw_tx, challenge_id:)
+    Mpp::Credential.new(
+      challenge: Mpp::ChallengeEcho.new(
+        id: challenge_id,
+        realm: REALM,
+        method: "tempo",
+        intent: "charge",
+        request: ""
+      ),
+      payload: {"type" => "transaction", "signature" => raw_tx}
+    )
   end
 
   def verify_hash(receipt, challenge_id:, memo: nil)

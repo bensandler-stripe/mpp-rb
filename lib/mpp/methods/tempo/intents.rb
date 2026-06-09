@@ -148,9 +148,43 @@ module Mpp
           end
 
           rpc_url = get_rpc_url
-          tx_hash = Rpc.call(rpc_url, "eth_sendRawTransaction", [raw_tx])
-          raise Mpp::VerificationError, "No transaction hash returned" unless tx_hash
+          reserved_tx_hash = T.let(nil, T.nilable(String))
+          store_key = T.let(nil, T.nilable(String))
+          if @store
+            reserved_tx_hash = raw_transaction_hash(raw_tx)
+            store_key = "mpp:charge:#{reserved_tx_hash.downcase}"
+            unless @store.put_if_absent(store_key, reserved_tx_hash)
+              receipt_data = fetch_transaction_receipt(rpc_url, reserved_tx_hash)
+              verify_transaction_receipt!(receipt_data, request, credential: credential)
+              return Mpp::Receipt.success(reserved_tx_hash)
+            end
+          end
 
+          tx_hash = T.let(nil, T.nilable(String))
+          begin
+            tx_hash = Rpc.call(rpc_url, "eth_sendRawTransaction", [raw_tx])
+          rescue => e
+            @store.delete(store_key) if @store && store_key
+            raise Mpp::VerificationError, "Transaction submission failed: #{e.message}"
+          end
+
+          unless tx_hash
+            @store.delete(store_key) if @store && store_key
+            raise Mpp::VerificationError, "No transaction hash returned"
+          end
+
+          if reserved_tx_hash && tx_hash.downcase != reserved_tx_hash.downcase
+            raise Mpp::VerificationError, "Returned transaction hash does not match submitted transaction"
+          end
+
+          tx_hash = reserved_tx_hash || tx_hash
+          receipt_data = fetch_transaction_receipt(rpc_url, tx_hash)
+          verify_transaction_receipt!(receipt_data, request, credential: credential)
+
+          Mpp::Receipt.success(tx_hash)
+        end
+
+        def fetch_transaction_receipt(rpc_url, tx_hash)
           receipt_data = T.let(nil, T.untyped)
           MAX_RECEIPT_RETRY_ATTEMPTS.times do |attempt|
             receipt_data = Rpc.call(rpc_url, "eth_getTransactionReceipt", [tx_hash])
@@ -160,6 +194,11 @@ module Mpp
           end
 
           raise Mpp::VerificationError, "Transaction receipt not found after retries" unless receipt_data
+
+          receipt_data
+        end
+
+        def verify_transaction_receipt!(receipt_data, request, credential:)
           raise Mpp::VerificationError, "Transaction reverted" unless receipt_data["status"] == "0x1"
           matched_logs = match_transfer_logs(receipt_data, request, expected_sender: receipt_data["from"])
           unless matched_logs.any?
@@ -167,8 +206,6 @@ module Mpp
               "Transaction must contain a Transfer log matching request parameters"
           end
           assert_challenge_bound_memo(matched_logs, credential.challenge) unless request.method_details.memo
-
-          Mpp::Receipt.success(tx_hash)
         end
 
         def verify_transfer_logs(receipt, request, expected_sender: nil)
@@ -299,6 +336,20 @@ module Mpp
           end
 
           raise Mpp::VerificationError, "Invalid transaction: no matching payment call found" unless found
+        end
+
+        def raw_transaction_hash(raw_tx)
+          Kernel.require "eth"
+
+          hex = raw_tx.delete_prefix("0x")
+          unless hex.match?(/\A[0-9a-fA-F]+\z/) && hex.length.even?
+            raise Mpp::VerificationError, "Invalid transaction signature"
+          end
+
+          "0x#{Eth::Util.keccak256([hex].pack("H*")).unpack1("H*")}"
+        rescue LoadError
+          raise Mpp::VerificationError,
+            "eth gem is required to compute transaction hash for transaction replay protection"
         end
 
         def match_transfer_calldata(call_data_hex, request)
