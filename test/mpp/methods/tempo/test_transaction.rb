@@ -12,6 +12,8 @@ class TestTempoTransaction < Minitest::Test
   CURRENCY = "0x20c0000000000000000000000000000000000000"
   RECIPIENT = "0x742d35Cc6634c0532925a3b844bC9e7595F8fE00"
   ACCOUNT = "0x1234567890abcdef1234567890abcdef12345678"
+  REALM = "api.example.com"
+  CHALLENGE_ID = "challenge-123"
 
   def test_build_signed_transfer_requires_eth_and_rlp
     original_require = Kernel.method(:require)
@@ -234,6 +236,77 @@ class TestTempoTransaction < Minitest::Test
     assert_includes error.message, "contains unauthorized extra calls"
   end
 
+  def test_charge_intent_cosigns_fee_payer_envelope_with_challenge_bound_memo
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(
+      calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_with_memo_data)]
+    )
+    intent = configured_fee_payer_intent
+
+    signed_raw = intent.send(
+      :cosign_as_fee_payer,
+      raw_tx,
+      CURRENCY,
+      request: charge_request,
+      challenge: charge_challenge
+    )
+    decoded = decode_raw_tx(signed_raw, 0x76)
+
+    assert_equal CURRENCY.downcase.delete_prefix("0x"), decoded[10].unpack1("H*")
+    assert_equal 3, decoded[11].length
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_with_plain_transfer
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(
+        :cosign_as_fee_payer,
+        raw_tx,
+        CURRENCY,
+        request: charge_request,
+        challenge: charge_challenge
+      )
+    end
+
+    assert_includes error.message, "no matching payment call found"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_with_wrong_challenge_memo
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    memo = Mpp::Methods::Tempo::Attribution.encode(
+      server_id: REALM,
+      challenge_id: "other-challenge"
+    )
+    raw_tx = build_fee_payer_envelope(
+      calls: [
+        Mpp::Methods::Tempo::Transaction::Call.new(
+          to: CURRENCY,
+          value: 0,
+          data: transfer_with_memo_data(memo: memo)
+        )
+      ]
+    )
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(
+        :cosign_as_fee_payer,
+        raw_tx,
+        CURRENCY,
+        request: charge_request,
+        challenge: charge_challenge
+      )
+    end
+
+    assert_includes error.message, "no matching payment call found"
+  end
+
   private
 
   def configured_fee_payer_intent
@@ -249,6 +322,16 @@ class TestTempoTransaction < Minitest::Test
       "currency" => CURRENCY,
       "recipient" => RECIPIENT,
       "methodDetails" => {"feePayer" => true, "chainId" => 42_431}
+    )
+  end
+
+  def charge_challenge
+    Mpp::ChallengeEcho.new(
+      id: CHALLENGE_ID,
+      realm: REALM,
+      method: "tempo",
+      intent: "charge",
+      request: ""
     )
   end
 
@@ -290,6 +373,17 @@ class TestTempoTransaction < Minitest::Test
     to_padded = RECIPIENT.delete_prefix("0x").downcase.rjust(64, "0")
     amount_padded = 1_000_000.to_s(16).rjust(64, "0")
     "0xa9059cbb#{to_padded}#{amount_padded}"
+  end
+
+  def transfer_with_memo_data(memo: nil)
+    memo ||= Mpp::Methods::Tempo::Attribution.encode(
+      server_id: REALM,
+      challenge_id: CHALLENGE_ID
+    )
+    to_padded = RECIPIENT.delete_prefix("0x").downcase.rjust(64, "0")
+    amount_padded = 1_000_000.to_s(16).rjust(64, "0")
+    memo_clean = memo.delete_prefix("0x").downcase
+    "0x95777d59#{to_padded}#{amount_padded}#{memo_clean}"
   end
 
   def decode_raw_tx(raw_tx, prefix)

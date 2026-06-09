@@ -98,13 +98,13 @@ module Mpp
         end
 
         def verify_transaction(payload, request, credential:)
-          validate_transaction_payload(payload.signature, request)
+          validate_transaction_payload(payload.signature, request, challenge: credential.challenge)
 
           raw_tx = payload.signature
 
           if request.method_details.fee_payer
             if fee_payer
-              raw_tx = cosign_as_fee_payer(raw_tx, request.currency, request: request)
+              raw_tx = cosign_as_fee_payer(raw_tx, request.currency, request: request, challenge: credential.challenge)
             else
               fee_payer_url = request.method_details.fee_payer_url || Defaults::DEFAULT_FEE_PAYER_URL
               result = Rpc.call(fee_payer_url, "eth_signRawTransaction", [raw_tx])
@@ -207,7 +207,7 @@ module Mpp
           raise Mpp::VerificationError, "Payment verification failed: memo is not bound to this challenge"
         end
 
-        def validate_transaction_payload(signature, request)
+        def validate_transaction_payload(signature, request, challenge: nil)
           # Best-effort pre-broadcast check
           begin
             require "rlp"
@@ -245,13 +245,13 @@ module Mpp
             next unless "0x#{to_hex}".downcase == request.currency.downcase
 
             data_hex = call_data_bytes.is_a?(String) ? call_data_bytes.unpack1("H*") : call_data_bytes.to_s
-            match_transfer_calldata(data_hex, request)
+            match_transfer_calldata(data_hex, request, challenge: challenge)
           end
 
           raise Mpp::VerificationError, "Invalid transaction: no matching payment call found" unless found
         end
 
-        def match_transfer_calldata(call_data_hex, request)
+        def match_transfer_calldata(call_data_hex, request, challenge: nil)
           return false if call_data_hex.length < 136
 
           selector = call_data_hex[0, 8].downcase
@@ -259,7 +259,7 @@ module Mpp
 
           if expected_memo
             return false unless selector == TRANSFER_WITH_MEMO_SELECTOR
-          elsif ![TRANSFER_SELECTOR, TRANSFER_WITH_MEMO_SELECTOR].include?(selector)
+          elsif selector != TRANSFER_WITH_MEMO_SELECTOR
             return false
           end
 
@@ -276,6 +276,13 @@ module Mpp
             memo_clean = expected_memo.downcase
             memo_clean = "0x#{memo_clean}" unless memo_clean.start_with?("0x")
             return false unless decoded_memo.downcase == memo_clean
+          else
+            return false if call_data_hex.length < 200
+            return false unless challenge
+
+            decoded_memo = "0x#{call_data_hex[136, 64]}"
+            return false unless Attribution.verify_server(decoded_memo, challenge.realm)
+            return false unless Attribution.verify_challenge_binding(decoded_memo, challenge.id)
           end
 
           true
@@ -301,7 +308,7 @@ module Mpp
           Mpp::Receipt.success(credential.challenge.id)
         end
 
-        def cosign_as_fee_payer(raw_tx, fee_token, request: nil)
+        def cosign_as_fee_payer(raw_tx, fee_token, request: nil, challenge: nil)
           require "eth"
           require "rlp"
 
@@ -387,7 +394,7 @@ module Mpp
             )
           end
 
-          validate_fee_payer_calls(calls, request) if request
+          validate_fee_payer_calls(calls, request, challenge: challenge) if request
 
           # Reconstruct transaction for sender signature recovery
           tx_for_recovery = Transaction::SignedTransaction.new(
@@ -433,7 +440,7 @@ module Mpp
           "0x#{signed.encoded_2718.unpack1("H*")}"
         end
 
-        def validate_fee_payer_calls(calls, request)
+        def validate_fee_payer_calls(calls, request, challenge: nil)
           if calls.length != 1
             raise Mpp::VerificationError, "Invalid transaction: contains unauthorized extra calls"
           end
@@ -445,7 +452,7 @@ module Mpp
           unless call.to.downcase == request.currency.downcase
             raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
           end
-          unless match_transfer_calldata(call.data.delete_prefix("0x"), request)
+          unless match_transfer_calldata(call.data.delete_prefix("0x"), request, challenge: challenge)
             raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
           end
         end
