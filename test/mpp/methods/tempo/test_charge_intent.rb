@@ -71,6 +71,51 @@ class TestTempoChargeIntent < Minitest::Test
     assert_equal HASH, result.reference
   end
 
+  def test_proof_credential_replay_rejected
+    account = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
+    chain_id = 4217
+    challenge_id = "challenge-proof-123"
+
+    signature = Mpp::Methods::Tempo::Proof.sign(
+      account: account,
+      chain_id: chain_id,
+      challenge_id: challenge_id
+    )
+
+    credential = Mpp::Credential.new(
+      challenge: Mpp::ChallengeEcho.new(
+        id: challenge_id,
+        realm: REALM,
+        method: "tempo",
+        intent: "charge",
+        request: ""
+      ),
+      payload: {"type" => "proof", "signature" => signature},
+      source: Mpp::Methods::Tempo::Proof.source(address: account.address, chain_id: chain_id)
+    )
+
+    request = {
+      "amount" => "0",
+      "currency" => CURRENCY,
+      "recipient" => RECIPIENT,
+      "methodDetails" => {"chainId" => chain_id}
+    }
+
+    store = Mpp::MemoryStore.new
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test", store: store)
+
+    # First submission succeeds and records the proof under its challenge id.
+    receipt = intent.verify(credential, request)
+    assert_equal challenge_id, receipt.reference
+    assert store.get("mpp:proof:#{challenge_id}")
+
+    # Replaying the identical credential is rejected.
+    error = assert_raises(Mpp::VerificationError) do
+      intent.verify(credential, request)
+    end
+    assert_match(/already been used/, error.message)
+  end
+
   private
 
   def verify_hash(receipt, challenge_id:, memo: nil)
