@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "stringio"
 
 class TestMiddleware < Minitest::Test
   def setup
@@ -63,6 +64,38 @@ class TestMiddleware < Minitest::Test
     assert_equal "no-store", headers["Cache-Control"]
     assert_vary_authorization headers
     assert_equal ["OK"], body
+  end
+
+  def test_rejects_paid_retry_with_tampered_body_digest
+    handler = mock_handler
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      env["rack.input"].read
+      [200, {}, ["OK"]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge("rack.input" => StringIO.new("{\"query\":\"paid\"}"))
+    )
+    assert_equal 402, status
+
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    assert_equal Mpp::BodyDigest.compute("{\"query\":\"paid\"}"), challenge.digest
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge(
+        "HTTP_AUTHORIZATION" => credential.to_authorization,
+        "rack.input" => StringIO.new("{\"query\":\"tampered\"}")
+      )
+    )
+
+    assert_equal 402, status
+    refute headers.key?("Payment-Receipt")
   end
 
   private

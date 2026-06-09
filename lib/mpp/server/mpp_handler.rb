@@ -63,9 +63,9 @@ module Mpp
       end
 
       # Handle a charge intent.
-      sig { params(authorization: T.nilable(String), amount: String, currency: T.nilable(String), recipient: T.nilable(String), expires: T.nilable(String), description: T.nilable(String), memo: T.nilable(String), fee_payer: T::Boolean, chain_id: T.nilable(Integer), extra: T.nilable(T::Hash[String, String])).returns(T.untyped) }
+      sig { params(authorization: T.nilable(String), amount: String, currency: T.nilable(String), recipient: T.nilable(String), expires: T.nilable(String), description: T.nilable(String), memo: T.nilable(String), fee_payer: T::Boolean, chain_id: T.nilable(Integer), extra: T.nilable(T::Hash[String, String]), body: T.untyped).returns(T.untyped) }
       def charge(authorization, amount, currency: nil, recipient: nil, expires: nil,
-        description: nil, memo: nil, fee_payer: false, chain_id: nil, extra: nil)
+        description: nil, memo: nil, fee_payer: false, chain_id: nil, extra: nil, body: nil)
         intent = @method.intents["charge"]
         raise ArgumentError, "Method #{@method.name} does not support charge intent" unless intent
 
@@ -112,7 +112,8 @@ module Mpp
           method: @method.name,
           description: description,
           expires: expires,
-          events: @events
+          events: @events,
+          body: body
         )
       end
     end
