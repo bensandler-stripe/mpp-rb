@@ -8,6 +8,9 @@ class TestTempoChargeIntent < Minitest::Test
   REALM = "api.example.com"
   RECIPIENT = "0x1234567890abcdef1234567890abcdef12345678"
   SENDER = "0x0000000000000000000000000000000000000001"
+  CHAIN_ID = Mpp::Methods::Tempo::Defaults::CHAIN_ID
+  SOURCE_ADDR = "0x00000000000000000000000000000000000000aa"
+  RELAYER = "0x00000000000000000000000000000000000000bb"
 
   def setup
     @intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test")
@@ -116,7 +119,177 @@ class TestTempoChargeIntent < Minitest::Test
     assert_match(/already been used/, error.message)
   end
 
+  def test_parse_hash_credential_source_absent_is_nil
+    assert_nil @intent.send(:parse_hash_credential_source, nil, CHAIN_ID)
+  end
+
+  def test_parse_hash_credential_source_valid_returns_address
+    source = did_pkh(CHAIN_ID, SOURCE_ADDR)
+    assert_equal SOURCE_ADDR, @intent.send(:parse_hash_credential_source, source, CHAIN_ID)
+  end
+
+  def test_parse_hash_credential_source_chain_mismatch_rejected
+    error = assert_raises(Mpp::VerificationError) do
+      @intent.send(:parse_hash_credential_source, did_pkh(1, SOURCE_ADDR), CHAIN_ID)
+    end
+    assert_match(/Hash credential source is invalid/, error.message)
+  end
+
+  def test_parse_hash_credential_source_rejects_malformed_variants
+    [
+      "not-a-valid-did",
+      "did:pkh:solana:#{CHAIN_ID}:#{SOURCE_ADDR}",
+      "did:pkh:eip155:04217:#{SOURCE_ADDR}",
+      "did:pkh:eip155:not-a-number:#{SOURCE_ADDR}",
+      "did:pkh:eip155:#{CHAIN_ID}:extra:#{SOURCE_ADDR}",
+      "did:pkh:eip155:#{CHAIN_ID}:not-an-address"
+    ].each do |source|
+      error = assert_raises(Mpp::VerificationError, "case: #{source}") do
+        @intent.send(:parse_hash_credential_source, source, CHAIN_ID)
+      end
+      assert_match(/Hash credential source is invalid/, error.message, "case: #{source}")
+    end
+  end
+
+  def test_hash_accepts_source_matching_transfer_sender
+    receipt = receipt([transfer_log(memo: bound_memo, from: SOURCE_ADDR)])
+    result = verify_hash_source(receipt, source: did_pkh(CHAIN_ID, SOURCE_ADDR))
+    assert_equal HASH, result.reference
+  end
+
+  def test_hash_accepts_source_when_receipt_sender_differs
+    # Relayer submitted the tx (receipt.from = RELAYER) but the transfer is
+    # from the declared source.
+    receipt = {"status" => "0x1", "from" => RELAYER,
+               "logs" => [transfer_log(memo: bound_memo, from: SOURCE_ADDR)]}
+    result = verify_hash_source(receipt, source: did_pkh(CHAIN_ID, SOURCE_ADDR))
+    assert_equal HASH, result.reference
+  end
+
+  def test_hash_rejects_source_differing_from_transfer_sender
+    receipt = receipt([transfer_log(memo: bound_memo, from: RELAYER)])
+    error = assert_raises(Mpp::VerificationError) do
+      verify_hash_source(receipt, source: did_pkh(CHAIN_ID, SOURCE_ADDR))
+    end
+    assert_match(/must contain a Transfer log/, error.message)
+  end
+
+  def test_hash_validate_sender_override_allows_mismatch
+    seen = {}
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(
+      rpc_url: "https://rpc.example.test",
+      validate_sender: ->(expected_sender:, sender:, source:) {
+        seen = {expected_sender: expected_sender, sender: sender, source: source}
+        true
+      }
+    )
+    receipt = receipt([transfer_log(memo: bound_memo, from: RELAYER)])
+    result = verify_hash_source(receipt, source: did_pkh(CHAIN_ID, SOURCE_ADDR), intent: intent)
+
+    assert_equal HASH, result.reference
+    assert_equal SOURCE_ADDR.downcase, seen[:expected_sender].downcase
+    assert_equal RELAYER.downcase, seen[:sender].downcase
+    assert_equal did_pkh(CHAIN_ID, SOURCE_ADDR), seen[:source]
+  end
+
+  def test_hash_validate_sender_returning_false_rejects
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(
+      rpc_url: "https://rpc.example.test",
+      validate_sender: ->(expected_sender:, sender:, source:) { false }
+    )
+    receipt = receipt([transfer_log(memo: bound_memo, from: RELAYER)])
+    error = assert_raises(Mpp::VerificationError) do
+      verify_hash_source(receipt, source: did_pkh(CHAIN_ID, SOURCE_ADDR), intent: intent)
+    end
+    assert_match(/must contain a Transfer log/, error.message)
+  end
+
+  def test_hash_rejects_source_from_different_chain
+    receipt = receipt([transfer_log(memo: bound_memo, from: SOURCE_ADDR)])
+    error = assert_raises(Mpp::VerificationError) do
+      verify_hash_source(receipt, source: did_pkh(1, SOURCE_ADDR))
+    end
+    assert_match(/Hash credential source is invalid/, error.message)
+  end
+
+  def test_hash_validate_sender_not_called_when_sender_matches
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(
+      rpc_url: "https://rpc.example.test",
+      validate_sender: ->(expected_sender:, sender:, source:) { raise "must not be called" }
+    )
+    receipt = receipt([transfer_log(memo: bound_memo, from: SOURCE_ADDR)])
+    result = verify_hash_source(receipt, source: did_pkh(CHAIN_ID, SOURCE_ADDR), intent: intent)
+    assert_equal HASH, result.reference
+  end
+
+  def test_hash_validate_sender_not_called_for_non_candidate_logs
+    explicit_memo = "0x#{"ab" * 32}"
+    other_memo = "0x#{"cd" * 32}"
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(
+      rpc_url: "https://rpc.example.test",
+      validate_sender: ->(expected_sender:, sender:, source:) { raise "must not be called" }
+    )
+    # First log has a wrong sender and a non-matching memo (non-candidate);
+    # second log matches fully, so the callback is never reached.
+    receipt = receipt([
+      transfer_log(memo: other_memo, from: RELAYER),
+      transfer_log(memo: explicit_memo, from: SOURCE_ADDR)
+    ])
+    credential = Mpp::Credential.new(
+      challenge: Mpp::ChallengeEcho.new(id: "challenge-123", realm: REALM, method: "tempo",
+        intent: "charge", request: ""),
+      payload: {"type" => "hash", "hash" => HASH},
+      source: did_pkh(CHAIN_ID, SOURCE_ADDR)
+    )
+    result = Mpp::Methods::Tempo::Rpc.stub(:call, ->(_rpc_url, _method, _params) { receipt }) do
+      intent.verify(credential, request_hash(memo: explicit_memo))
+    end
+    assert_equal HASH, result.reference
+  end
+
+  def test_hash_malformed_source_does_not_consume_hash
+    store = Mpp::MemoryStore.new
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test", store: store)
+    receipt = receipt([transfer_log(memo: bound_memo, from: SOURCE_ADDR)])
+
+    # Malformed source is rejected before the hash is reserved.
+    assert_raises(Mpp::VerificationError) do
+      verify_hash_source(receipt, source: "not-a-valid-did", intent: intent)
+    end
+    assert_nil store.get("mpp:charge:#{HASH.downcase}")
+
+    # A valid retry then succeeds.
+    result = verify_hash_source(receipt, source: did_pkh(CHAIN_ID, SOURCE_ADDR), intent: intent)
+    assert_equal HASH, result.reference
+  end
+
   private
+
+  def did_pkh(chain_id, address)
+    "did:pkh:eip155:#{chain_id}:#{address}"
+  end
+
+  def bound_memo
+    Mpp::Methods::Tempo::Attribution.encode(server_id: REALM, challenge_id: "challenge-123")
+  end
+
+  def verify_hash_source(receipt, source:, intent: @intent, challenge_id: "challenge-123")
+    credential = Mpp::Credential.new(
+      challenge: Mpp::ChallengeEcho.new(
+        id: challenge_id,
+        realm: REALM,
+        method: "tempo",
+        intent: "charge",
+        request: ""
+      ),
+      payload: {"type" => "hash", "hash" => HASH},
+      source: source
+    )
+
+    Mpp::Methods::Tempo::Rpc.stub(:call, ->(_rpc_url, _method, _params) { receipt }) do
+      intent.verify(credential, request_hash)
+    end
+  end
 
   def verify_hash(receipt, challenge_id:, memo: nil)
     credential = Mpp::Credential.new(
@@ -153,10 +326,10 @@ class TestTempoChargeIntent < Minitest::Test
     {"status" => "0x1", "from" => SENDER, "logs" => logs}
   end
 
-  def transfer_log(memo: nil)
+  def transfer_log(memo: nil, from: SENDER)
     topics = [
       memo ? Mpp::Methods::Tempo::TRANSFER_WITH_MEMO_TOPIC : Mpp::Methods::Tempo::TRANSFER_TOPIC,
-      topic_address(SENDER),
+      topic_address(from),
       topic_address(RECIPIENT)
     ]
     topics << memo if memo
