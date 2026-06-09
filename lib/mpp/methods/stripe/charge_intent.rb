@@ -40,7 +40,7 @@ module Mpp
           payment_method_types = method_details["paymentMethodTypes"]
           unless payment_method_types.is_a?(Array) &&
               payment_method_types.any? &&
-              payment_method_types.all? { |type| type.is_a?(String) && !type.empty? }
+              payment_method_types.all? { |type| type.is_a?(String) && !type.strip.empty? }
             raise Mpp::VerificationError, "Invalid or missing methodDetails.paymentMethodTypes"
           end
 
