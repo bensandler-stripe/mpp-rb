@@ -235,6 +235,11 @@ module Mpp
 
           return unless decoded.is_a?(Array) && decoded.length >= 5
 
+          chain_id = int_value(decoded[0])
+          unless chain_id == Integer(request.method_details.chain_id)
+            raise Mpp::VerificationError, "Invalid transaction: chain ID does not match request"
+          end
+
           calls_data = decoded[4] || []
           raise Mpp::VerificationError, "Transaction contains no calls" if calls_data.empty?
 
@@ -331,23 +336,13 @@ module Mpp
             raise Mpp::VerificationError, "Failed to deserialize client transaction: #{e.message}"
           end
 
-          int = ->(b) {
-            if b.is_a?(String) && !b.empty?
-              b.unpack1("H*").to_i(16)
-            elsif b.is_a?(Integer)
-              b
-            else
-              0
-            end
-          }
-
           # Validate fee-payer invariants
           fee_token_field = decoded[10]
           if fee_token_field.is_a?(String) && !fee_token_field.empty?
             raise Mpp::VerificationError, "Fee payer transaction must not include fee_token (server sets it)"
           end
 
-          nonce_key = int.call(decoded[6])
+          nonce_key = int_value(decoded[6])
           unless nonce_key == (1 << 256) - 1
             raise Mpp::VerificationError, "Fee payer envelope must use expiring nonce key (U256::MAX)"
           end
@@ -356,16 +351,19 @@ module Mpp
           if !valid_before_raw.is_a?(String) || valid_before_raw.empty?
             raise Mpp::VerificationError, "Fee payer envelope must include valid_before"
           end
-          valid_before = int.call(valid_before_raw)
+          valid_before = int_value(valid_before_raw)
           if valid_before <= Time.now.to_i
             raise Mpp::VerificationError,
               "Fee payer envelope expired: valid_before (#{valid_before}) is not in the future"
           end
 
-          chain_id = int.call(decoded[0])
-          max_priority_fee_per_gas = int.call(decoded[1])
-          max_fee_per_gas = int.call(decoded[2])
-          gas_limit = int.call(decoded[3])
+          chain_id = int_value(decoded[0])
+          if request && chain_id != Integer(request.method_details.chain_id)
+            raise Mpp::VerificationError, "Invalid transaction: chain ID does not match request"
+          end
+          max_priority_fee_per_gas = int_value(decoded[1])
+          max_fee_per_gas = int_value(decoded[2])
+          gas_limit = int_value(decoded[3])
           access_list = decoded[5] || Transaction::EMPTY_LIST
           policy = FeePayerPolicy.for_chain_id(chain_id)
 
@@ -398,7 +396,7 @@ module Mpp
           calls = calls_data.map do |c|
             Transaction::Call.new(
               to: "0x#{c[0].unpack1("H*")}",
-              value: int.call(c[1]),
+              value: int_value(c[1]),
               data: "0x#{c[2].unpack1("H*")}"
             )
           end
@@ -413,10 +411,10 @@ module Mpp
             gas_limit: gas_limit,
             calls: calls,
             access_list: Transaction::EMPTY_LIST,
-            nonce_key: int.call(decoded[6]),
-            nonce: int.call(decoded[7]),
-            valid_before: int.call(decoded[8]),
-            valid_after: (decoded[9].is_a?(String) && !decoded[9].empty?) ? int.call(decoded[9]) : nil,
+            nonce_key: int_value(decoded[6]),
+            nonce: int_value(decoded[7]),
+            valid_before: int_value(decoded[8]),
+            valid_after: (decoded[9].is_a?(String) && !decoded[9].empty?) ? int_value(decoded[9]) : nil,
             fee_token: nil,
             sender_signature: sender_sig,
             fee_payer_signature: Transaction::EMPTY_SIGNATURE,
@@ -440,7 +438,7 @@ module Mpp
           raise Mpp::VerificationError, "No fee token available" unless resolved_fee_token
 
           allowed_fee_tokens = fee_payer_allowed_fee_tokens ||
-            [Defaults.default_currency_for_chain(int.call(decoded[0])).downcase]
+            [Defaults.default_currency_for_chain(chain_id).downcase]
           unless allowed_fee_tokens.map(&:downcase).include?(resolved_fee_token.downcase)
             raise Mpp::VerificationError,
               "Fee token #{resolved_fee_token} is not allowed by fee payer policy"
@@ -470,6 +468,16 @@ module Mpp
           end
           unless match_transfer_calldata(call.data.delete_prefix("0x"), request, challenge: challenge)
             raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
+          end
+        end
+
+        def int_value(value)
+          if value.is_a?(String) && !value.empty?
+            value.unpack1("H*").to_i(16)
+          elsif value.is_a?(Integer)
+            value
+          else
+            0
           end
         end
       end

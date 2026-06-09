@@ -308,6 +308,28 @@ class TestTempoTransaction < Minitest::Test
     assert_includes error.message, "no matching payment call found"
   end
 
+  def test_charge_intent_rejects_fee_payer_envelope_with_wrong_chain_id
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(
+      chain_id: 4217,
+      calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_with_memo_data)]
+    )
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(
+        :cosign_as_fee_payer,
+        raw_tx,
+        CURRENCY,
+        request: charge_request,
+        challenge: charge_challenge
+      )
+    end
+
+    assert_includes error.message, "chain ID does not match request"
+  end
+
   def test_charge_intent_rejects_non_allowlisted_fee_token
     skip "eth/rlp gems not available" unless eth_and_rlp_available?
 
