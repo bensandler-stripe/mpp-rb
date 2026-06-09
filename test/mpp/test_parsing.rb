@@ -218,6 +218,24 @@ class TestParsing < Minitest::Test
     assert_equal challenge.id, result[0].id
   end
 
+  def test_from_www_authenticate_list_leading_whitespace
+    challenge = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"}
+    )
+    # A header carrying leading optional whitespace (RFC 9110 OWS) must still
+    # surface the Payment challenge; the first scheme is a boundary even when
+    # whitespace precedes it.
+    header = "   #{challenge.to_www_authenticate("api.example.com")}"
+    result = Mpp::Challenge.from_www_authenticate_list(header)
+
+    assert_equal 1, result.length
+    assert_equal challenge.id, result[0].id
+  end
+
   def test_from_www_authenticate_list_multiple
     c1 = Mpp::Challenge.create(
       secret_key: "s1",

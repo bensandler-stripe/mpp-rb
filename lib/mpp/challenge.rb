@@ -130,9 +130,12 @@ module Mpp
     end
 
     def self.scheme_boundary?(header, index)
-      return true if index == 0
-
       previous = T.must(header[0...index]).rstrip
+      # Start of the header, including the case where only optional whitespace
+      # (RFC 9110 OWS) precedes the first scheme; otherwise a scheme is a
+      # boundary only immediately after a comma separating two schemes.
+      return true if previous.empty?
+
       previous.end_with?(",")
     end
 
