@@ -162,7 +162,7 @@ module Mpp
               submitted_challenge: echo
             )
           end
-          raise
+          Kernel.raise
         end
         if dispatcher&.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
           emit_payment_success(

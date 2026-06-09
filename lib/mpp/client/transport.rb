@@ -24,27 +24,27 @@ module Mpp
         @events = T.let(events || Mpp::Events.client_dispatcher, Mpp::Events::Dispatcher)
       end
 
-      sig { params(name: String, handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(name: String, handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on(name, handler = nil, &block)
         @events.on(name, handler, &block)
       end
 
-      sig { params(handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on_challenge_received(handler = nil, &block)
         on(Mpp::Events::CHALLENGE_RECEIVED, handler, &block)
       end
 
-      sig { params(handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on_credential_created(handler = nil, &block)
         on(Mpp::Events::CREDENTIAL_CREATED, handler, &block)
       end
 
-      sig { params(handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on_payment_failed(handler = nil, &block)
         on(Mpp::Events::PAYMENT_FAILED, handler, &block)
       end
 
-      sig { params(handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on_payment_response(handler = nil, &block)
         on(Mpp::Events::PAYMENT_RESPONSE, handler, &block)
       end
@@ -73,7 +73,7 @@ module Mpp
           end
         end
 
-        auth_header = nil
+        auth_header = T.let(nil, T.nilable(String))
         create_credential = Kernel.lambda do
           auth_header ||= credential_authorization(matched_method.create_credential(challenge))
         end

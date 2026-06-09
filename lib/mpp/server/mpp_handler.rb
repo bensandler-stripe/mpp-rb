@@ -42,22 +42,22 @@ module Mpp
         )
       end
 
-      sig { params(name: String, handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(name: String, handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on(name, handler = nil, &block)
         @events.on(name, handler, &block)
       end
 
-      sig { params(handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on_challenge_created(handler = nil, &block)
         on(Mpp::Events::CHALLENGE_CREATED, handler, &block)
       end
 
-      sig { params(handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on_payment_failed(handler = nil, &block)
         on(Mpp::Events::PAYMENT_FAILED, handler, &block)
       end
 
-      sig { params(handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on_payment_success(handler = nil, &block)
         on(Mpp::Events::PAYMENT_SUCCESS, handler, &block)
       end

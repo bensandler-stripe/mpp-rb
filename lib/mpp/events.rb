@@ -13,7 +13,10 @@ module Mpp
     PAYMENT_RESPONSE = "payment.response"
     PAYMENT_SUCCESS = "payment.success"
 
-    Event = Data.define(:name, :payload)
+    class Event < T::Struct
+      const :name, String
+      const :payload, T::Hash[Symbol, T.untyped]
+    end
 
     class Dispatcher
       extend T::Sig
@@ -25,15 +28,16 @@ module Mpp
         @handlers = T.let(@event_names.keys.to_h { |name| [name, []] }, T::Hash[String, T::Array[T.untyped]])
       end
 
-      sig { params(name: String, handler: T.nilable(T.untyped), block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
+      sig { params(name: String, handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on(name, handler = nil, &block)
         raise ArgumentError, "Unknown event: #{name}" unless @event_names.key?(name)
 
         callback = handler || block
         raise ArgumentError, "handler is required" unless callback
 
-        @handlers[name] << callback
-        Kernel.lambda { @handlers[name].delete(callback) }
+        handlers = T.must(@handlers[name])
+        handlers << callback
+        Kernel.lambda { handlers.delete(callback) }
       end
 
       sig { params(name: String, payload: T::Hash[Symbol, T.untyped]).void }
@@ -48,7 +52,7 @@ module Mpp
       def emit_first(name, payload)
         return nil unless has_handlers?(name)
 
-        result = nil
+        result = T.let(nil, T.untyped)
 
         T.must(@handlers[name]).each do |handler|
           value = call(handler, payload)
