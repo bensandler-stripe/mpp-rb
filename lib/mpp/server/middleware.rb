@@ -83,6 +83,7 @@ module Mpp
       def mppx_scope(env)
         scope = T.let({}, T::Hash[String, String])
         route = env["action_dispatch.route_uri_pattern"] || env["sinatra.route"] || env["roda.route"]
+        route = route.split(" ", 2).last if route.is_a?(String) && route.match?(/\A[A-Z]+\s+/)
         scope["route"] = route if route.is_a?(String) && !route.empty?
         path = env["PATH_INFO"]
         scope["resource"] = path if path.is_a?(String) && !path.empty?

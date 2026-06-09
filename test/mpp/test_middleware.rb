@@ -106,6 +106,30 @@ class TestMiddleware < Minitest::Test
     refute headers.key?("Payment-Receipt")
   end
 
+  def test_normalizes_method_prefixed_sinatra_route_scope
+    handler = mock_handler
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      [200, {}, ["OK"]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge(
+        "PATH_INFO" => "/paid/one",
+        "QUERY_STRING" => "view=full",
+        "sinatra.route" => "GET /paid/:id"
+      )
+    )
+
+    assert_equal 402, status
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    assert_equal(
+      {"route" => "/paid/:id", "resource" => "/paid/one", "query" => "view=full"},
+      challenge.request["_mppx_scope"]
+    )
+  end
+
   def test_rejects_paid_retry_with_tampered_body_digest
     handler = mock_handler
     app = lambda { |env|
