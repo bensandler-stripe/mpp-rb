@@ -85,6 +85,12 @@ module Mpp
         def parse_hash_credential_source(source, expected_chain_id)
           return nil unless source
 
+          expected_chain_id = begin
+            Integer(expected_chain_id)
+          rescue ArgumentError, TypeError
+            raise Mpp::VerificationError, "Hash credential source is invalid"
+          end
+
           parsed = Proof.parse_source(source)
           unless parsed && parsed[:chain_id] == expected_chain_id
             raise Mpp::VerificationError, "Hash credential source is invalid"
@@ -110,9 +116,11 @@ module Mpp
           raise Mpp::VerificationError, "Transaction reverted" unless result["status"] == "0x1"
 
           # Use the source address if present, otherwise the receipt sender.
+          # The sender override only applies when a source was declared; without
+          # one, the legacy receipt["from"] match must hold unconditionally.
           expected_sender = source_address || result["from"]
           matched_logs = match_transfer_logs(result, request, expected_sender: expected_sender,
-            source: credential.source, validate_sender: @validate_sender)
+            source: credential.source, validate_sender: source_address ? @validate_sender : nil)
           unless matched_logs.any?
             raise Mpp::VerificationError,
               "Transaction must contain a Transfer log matching request parameters"

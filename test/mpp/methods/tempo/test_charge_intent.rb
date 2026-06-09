@@ -135,6 +135,18 @@ class TestTempoChargeIntent < Minitest::Test
     assert_match(/Hash credential source is invalid/, error.message)
   end
 
+  def test_parse_hash_credential_source_accepts_string_chain_id
+    source = did_pkh(CHAIN_ID, SOURCE_ADDR)
+    assert_equal SOURCE_ADDR, @intent.send(:parse_hash_credential_source, source, CHAIN_ID.to_s)
+  end
+
+  def test_parse_hash_credential_source_rejects_non_numeric_chain_id
+    error = assert_raises(Mpp::VerificationError) do
+      @intent.send(:parse_hash_credential_source, did_pkh(CHAIN_ID, SOURCE_ADDR), "not-a-number")
+    end
+    assert_match(/Hash credential source is invalid/, error.message)
+  end
+
   def test_parse_hash_credential_source_rejects_malformed_variants
     [
       "not-a-valid-did",
@@ -200,6 +212,22 @@ class TestTempoChargeIntent < Minitest::Test
     receipt = receipt([transfer_log(memo: bound_memo, from: RELAYER)])
     error = assert_raises(Mpp::VerificationError) do
       verify_hash_source(receipt, source: did_pkh(CHAIN_ID, SOURCE_ADDR), intent: intent)
+    end
+    assert_match(/must contain a Transfer log/, error.message)
+  end
+
+  def test_hash_no_source_ignores_validate_sender_override
+    # With no declared source the override must not apply: a transfer whose
+    # sender differs from receipt["from"] must still be rejected even if the
+    # callback would authorize it.
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(
+      rpc_url: "https://rpc.example.test",
+      validate_sender: ->(expected_sender:, sender:, source:) { true }
+    )
+    # receipt["from"] is SENDER, but the transfer log is from RELAYER.
+    receipt = receipt([transfer_log(memo: bound_memo, from: RELAYER)])
+    error = assert_raises(Mpp::VerificationError) do
+      verify_hash_source(receipt, source: nil, intent: intent)
     end
     assert_match(/must contain a Transfer log/, error.message)
   end
