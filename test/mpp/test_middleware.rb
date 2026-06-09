@@ -98,6 +98,38 @@ class TestMiddleware < Minitest::Test
     refute headers.key?("Payment-Receipt")
   end
 
+  def test_accepts_paid_retry_with_matching_body_digest
+    handler = mock_handler
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      [200, {}, [env["rack.input"].read]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+
+    body = "{\"query\":\"paid\"}"
+    status, headers, _response_body = middleware.call(
+      minimal_env.merge("rack.input" => StringIO.new(body))
+    )
+    assert_equal 402, status
+
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+
+    status, headers, response_body = middleware.call(
+      minimal_env.merge(
+        "HTTP_AUTHORIZATION" => credential.to_authorization,
+        "rack.input" => StringIO.new(body)
+      )
+    )
+
+    assert_equal 200, status
+    assert headers.key?("Payment-Receipt")
+    assert_equal [body], response_body
+  end
+
   private
 
   def minimal_env
