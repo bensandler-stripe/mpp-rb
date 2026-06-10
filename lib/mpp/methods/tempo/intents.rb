@@ -20,12 +20,13 @@ module Mpp
         attr_reader :name
         attr_accessor :rpc_url
 
-        def initialize(chain_id: nil, rpc_url: nil, timeout: 30, store: nil)
+        def initialize(chain_id: nil, rpc_url: nil, timeout: 30, store: nil, validate_sender: nil)
           @name = "charge"
           @rpc_url = rpc_url || (chain_id ? Defaults.rpc_url_for_chain(chain_id) : nil)
           @_method = nil
           @timeout = timeout
           @store = store
+          @validate_sender = validate_sender
         end
 
         def fee_payer
@@ -79,7 +80,29 @@ module Mpp
           @rpc_url
         end
 
+        # Parse a hash credential source: nil if absent, the address for a
+        # did:pkh:eip155 DID matching expected_chain_id, else raises.
+        def parse_hash_credential_source(source, expected_chain_id)
+          return nil unless source
+
+          expected_chain_id = begin
+            Integer(expected_chain_id)
+          rescue ArgumentError, TypeError
+            raise Mpp::VerificationError, "Hash credential source is invalid"
+          end
+
+          parsed = Proof.parse_source(source)
+          unless parsed && parsed[:chain_id] == expected_chain_id
+            raise Mpp::VerificationError, "Hash credential source is invalid"
+          end
+
+          parsed[:address]
+        end
+
         def verify_hash(payload, request, credential:)
+          # Validate the source before reserving the hash.
+          source_address = parse_hash_credential_source(credential.source, request.method_details.chain_id)
+
           if @store
             store_key = "mpp:charge:#{payload.hash.downcase}"
             raise Mpp::VerificationError, "Transaction hash already used" unless @store.put_if_absent(store_key,
@@ -91,7 +114,13 @@ module Mpp
 
           raise Mpp::VerificationError, "Transaction not found" unless result
           raise Mpp::VerificationError, "Transaction reverted" unless result["status"] == "0x1"
-          matched_logs = match_transfer_logs(result, request, expected_sender: result["from"])
+
+          # Use the source address if present, otherwise the receipt sender.
+          # The sender override only applies when a source was declared; without
+          # one, the legacy receipt["from"] match must hold unconditionally.
+          expected_sender = source_address || result["from"]
+          matched_logs = match_transfer_logs(result, request, expected_sender: expected_sender,
+            source: credential.source, validate_sender: source_address ? @validate_sender : nil)
           unless matched_logs.any?
             raise Mpp::VerificationError,
               "Transaction must contain a Transfer log matching request parameters"
@@ -146,7 +175,7 @@ module Mpp
           match_transfer_logs(receipt, request, expected_sender: expected_sender).any?
         end
 
-        def match_transfer_logs(receipt, request, expected_sender: nil)
+        def match_transfer_logs(receipt, request, expected_sender: nil, source: nil, validate_sender: nil)
           expected_memo = request.method_details.memo
           matched_logs = []
 
@@ -160,40 +189,57 @@ module Mpp
             to_address = "0x#{topics[2][-40..]}"
 
             next unless to_address.downcase == request.recipient.downcase
-            next if expected_sender && from_address.downcase != expected_sender.downcase
 
-            if expected_memo
-              next unless topics[0] == TRANSFER_WITH_MEMO_TOPIC
-              next if topics.length < 4
-
-              data = log.fetch("data", "0x")
-              next if data.length < 66
-
-              amount = data[2, 64].to_i(16)
-              memo = topics[3]
-              memo_clean = expected_memo.downcase
-              memo_clean = "0x#{memo_clean}" unless memo_clean.start_with?("0x")
-              if amount == Integer(request.amount) && memo.downcase == memo_clean
-                matched_logs << {kind: :memo, memo: memo}
-              end
-            else
-              case topics[0]
-              when TRANSFER_WITH_MEMO_TOPIC
+            matched =
+              if expected_memo
+                next unless topics[0] == TRANSFER_WITH_MEMO_TOPIC
                 next if topics.length < 4
 
                 data = log.fetch("data", "0x")
                 next if data.length < 66
 
                 amount = data[2, 64].to_i(16)
-                matched_logs << {kind: :memo, memo: topics[3]} if amount == Integer(request.amount)
-              when TRANSFER_TOPIC
-                data = log.fetch("data", "0x")
-                next if data.length < 66
+                memo = topics[3]
+                memo_clean = expected_memo.downcase
+                memo_clean = "0x#{memo_clean}" unless memo_clean.start_with?("0x")
+                next unless amount == Integer(request.amount) && memo.downcase == memo_clean
 
-                amount = data.delete_prefix("0x").to_i(16)
-                matched_logs << {kind: :transfer} if amount == Integer(request.amount)
+                {kind: :memo, memo: memo}
+              else
+                case topics[0]
+                when TRANSFER_WITH_MEMO_TOPIC
+                  next if topics.length < 4
+
+                  data = log.fetch("data", "0x")
+                  next if data.length < 66
+
+                  amount = data[2, 64].to_i(16)
+                  next unless amount == Integer(request.amount)
+
+                  {kind: :memo, memo: topics[3]}
+                when TRANSFER_TOPIC
+                  data = log.fetch("data", "0x")
+                  next if data.length < 66
+
+                  amount = data.delete_prefix("0x").to_i(16)
+                  next unless amount == Integer(request.amount)
+
+                  {kind: :transfer}
+                end
               end
+
+            next unless matched
+
+            # On a sender mismatch, validate_sender may authorize the log.
+            if expected_sender && from_address.downcase != expected_sender.downcase
+              next unless validate_sender&.call(
+                expected_sender: expected_sender,
+                sender: from_address,
+                source: source
+              )
             end
+
+            matched_logs << matched
           end
 
           matched_logs.sort_by { |log| (log[:kind] == :memo) ? 0 : 1 }
