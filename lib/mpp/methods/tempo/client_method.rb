@@ -74,6 +74,11 @@ module Mpp
           if challenge_chain_id
             begin
               parsed_chain_id = Integer(challenge_chain_id)
+              # Chain pinning: reject a challenge whose chainId conflicts with the
+              # configured chain, before any RPC call or signing.
+              if @chain_id && parsed_chain_id != @chain_id
+                raise TransactionError, "Chain ID mismatch: expected #{@chain_id}, got #{parsed_chain_id}"
+              end
               resolved = Defaults::CHAIN_RPC_URLS[parsed_chain_id]
               if resolved
                 resolved_rpc_url = resolved
