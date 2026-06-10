@@ -33,7 +33,8 @@ class TestStripeMethod < Minitest::Test
     result = @method.transform_request(request, nil)
 
     assert_equal "acct_test123", result["methodDetails"]["networkId"]
-    assert_equal ["card"], result["methodDetails"]["paymentMethods"]
+    assert_equal ["card"], result["methodDetails"]["paymentMethodTypes"]
+    refute result["methodDetails"].key?("paymentMethods")
     assert_equal({"app" => "myapp"}, result["methodDetails"]["metadata"])
   end
 
@@ -50,22 +51,43 @@ class TestStripeMethod < Minitest::Test
     assert_equal "value", result["methodDetails"]["existing"]
   end
 
-  def test_transform_request_omits_nil_payment_methods
+  def test_requires_payment_methods_allowlist
+    assert_raises(ArgumentError) do
+      Mpp::Methods::Stripe::StripeMethod.new(
+        secret_key: "sk_test_fake",
+        network_id: "acct_test123"
+      )
+    end
+  end
+
+  def test_rejects_empty_payment_methods_allowlist
+    assert_raises(ArgumentError) do
+      Mpp::Methods::Stripe::StripeMethod.new(
+        secret_key: "sk_test_fake",
+        network_id: "acct_test123",
+        payment_methods: []
+      )
+    end
+  end
+
+  def test_transform_request_omits_nil_metadata
     method = Mpp::Methods::Stripe::StripeMethod.new(
       secret_key: "sk_test_fake",
-      network_id: "acct_test123"
+      network_id: "acct_test123",
+      payment_methods: ["card"]
     )
     result = method.transform_request({"amount" => "100"}, nil)
 
     assert_equal "acct_test123", result["methodDetails"]["networkId"]
-    refute result["methodDetails"].key?("paymentMethods")
+    assert_equal ["card"], result["methodDetails"]["paymentMethodTypes"]
     refute result["methodDetails"].key?("metadata")
   end
 
   def test_factory_creates_method_with_charge_intent
     method = Mpp::Methods::Stripe.stripe(
       secret_key: "sk_test_fake",
-      network_id: "acct_test123"
+      network_id: "acct_test123",
+      payment_methods: ["card"]
     )
 
     assert_equal "stripe", method.name
@@ -100,7 +122,7 @@ class TestStripeMethod < Minitest::Test
     assert_equal "usd", request["currency"]
     assert_equal "acct_test123", request["recipient"]
     assert_equal "acct_test123", request["methodDetails"]["networkId"]
-    assert_equal ["card"], request["methodDetails"]["paymentMethods"]
+    assert_equal ["card"], request["methodDetails"]["paymentMethodTypes"]
     assert_equal({"order" => "abc"}, request["methodDetails"]["metadata"])
   end
 end

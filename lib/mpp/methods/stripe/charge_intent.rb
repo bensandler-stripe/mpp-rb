@@ -33,21 +33,28 @@ module Mpp
           spt = payload_data["spt"]
           external_id = payload_data["externalId"]
 
+          method_details = request["methodDetails"]
+          method_details = {} unless method_details.is_a?(Hash)
+
+          # Enforce the payment method types allowlist from the challenge
+          payment_method_types = method_details["paymentMethodTypes"]
+          unless payment_method_types.is_a?(Array) &&
+              payment_method_types.any? &&
+              payment_method_types.all? { |type| type.is_a?(String) && !type.strip.empty? }
+            raise Mpp::VerificationError, "Invalid or missing methodDetails.paymentMethodTypes"
+          end
+
           # Build PaymentIntent params
           params = {
             amount: Integer(request["amount"]),
             currency: request["currency"],
             shared_payment_granted_token: spt,
             confirm: true,
-            automatic_payment_methods: {
-              enabled: true,
-              allow_redirects: "never"
-            }
+            payment_method_types: payment_method_types
           }
 
           # Include metadata from methodDetails if present
-          method_details = request["methodDetails"]
-          if method_details.is_a?(Hash) && method_details["metadata"].is_a?(Hash)
+          if method_details["metadata"].is_a?(Hash)
             params[:metadata] = method_details["metadata"].transform_values(&:to_s)
           end
 
