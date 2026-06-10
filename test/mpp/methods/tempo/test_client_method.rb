@@ -157,6 +157,19 @@ class TestTempoChainPinning < Minitest::Test
     assert_equal "did:pkh:eip155:42431:#{RECIPIENT}", credential.source
   end
 
+  def test_accepts_matching_string_pinned_chain_id
+    # chain_id may be configured as a String (e.g. from ENV); it should be
+    # normalized before comparison so a matching chain is not rejected.
+    method = make_method(chain_id: "42431")
+    challenge = make_challenge(chain_id: 42_431)
+
+    credential = with_stubbed_transfer(method, source_chain_id: 42_431, expected_chain_id: 42_431) do
+      method.create_credential(challenge)
+    end
+
+    assert_equal "did:pkh:eip155:42431:#{RECIPIENT}", credential.source
+  end
+
   def test_unpinned_accepts_any_chain_id
     method = make_method(chain_id: nil)
     challenge = make_challenge(chain_id: 1)
