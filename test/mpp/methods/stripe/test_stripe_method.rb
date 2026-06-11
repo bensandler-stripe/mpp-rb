@@ -83,6 +83,30 @@ class TestStripeMethod < Minitest::Test
     refute result["methodDetails"].key?("metadata")
   end
 
+  def test_transform_request_binds_configured_external_id
+    method = Mpp::Methods::Stripe::StripeMethod.new(
+      secret_key: "sk_test_fake",
+      network_id: "acct_test123",
+      payment_methods: ["card"],
+      external_id: "order-123"
+    )
+    result = method.transform_request({"amount" => "100"}, nil)
+
+    assert_equal "order-123", result["externalId"]
+  end
+
+  def test_transform_request_preserves_route_external_id
+    method = Mpp::Methods::Stripe::StripeMethod.new(
+      secret_key: "sk_test_fake",
+      network_id: "acct_test123",
+      payment_methods: ["card"],
+      external_id: "configured-order"
+    )
+    result = method.transform_request({"amount" => "100", "externalId" => "route-order"}, nil)
+
+    assert_equal "route-order", result["externalId"]
+  end
+
   def test_factory_creates_method_with_charge_intent
     method = Mpp::Methods::Stripe.stripe(
       secret_key: "sk_test_fake",
@@ -96,6 +120,54 @@ class TestStripeMethod < Minitest::Test
     assert_equal 2, method.decimals
     assert method.intents.key?("charge")
     assert_instance_of Mpp::Methods::Stripe::ChargeIntent, method.intents["charge"]
+  end
+
+  def test_client_method_echoes_request_bound_external_id
+    method = Mpp::Methods::Stripe::ClientMethod.new(
+      create_spt: ->(**_params) { "spt_test123" },
+      payment_method: "pm_card_visa"
+    )
+    challenge = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "test-realm",
+      method: "stripe",
+      intent: "charge",
+      request: {
+        "amount" => "100",
+        "currency" => "usd",
+        "externalId" => "server-order-123",
+        "methodDetails" => {"networkId" => "acct_test123", "paymentMethodTypes" => ["card"]}
+      }
+    )
+
+    credential = method.create_credential(challenge)
+
+    assert_equal "spt_test123", credential.payload["spt"]
+    assert_equal "server-order-123", credential.payload["externalId"]
+  end
+
+  def test_client_method_request_external_id_overrides_local_external_id
+    method = Mpp::Methods::Stripe::ClientMethod.new(
+      create_spt: ->(**_params) { "spt_test123" },
+      external_id: "client-order-999",
+      payment_method: "pm_card_visa"
+    )
+    challenge = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "test-realm",
+      method: "stripe",
+      intent: "charge",
+      request: {
+        "amount" => "100",
+        "currency" => "usd",
+        "externalId" => "server-order-123",
+        "methodDetails" => {"networkId" => "acct_test123", "paymentMethodTypes" => ["card"]}
+      }
+    )
+
+    credential = method.create_credential(challenge)
+
+    assert_equal "server-order-123", credential.payload["externalId"]
   end
 
   def test_integration_challenge_round_trip

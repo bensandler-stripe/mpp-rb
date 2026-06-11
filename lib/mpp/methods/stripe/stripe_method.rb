@@ -14,7 +14,7 @@ module Mpp
 
         def initialize(secret_key:, network_id:, payment_methods: nil,
           metadata: nil, currency: Defaults::DEFAULT_CURRENCY,
-          decimals: Defaults::DEFAULT_DECIMALS)
+          decimals: Defaults::DEFAULT_DECIMALS, external_id: nil)
           unless payment_methods.is_a?(Array) &&
               payment_methods.any? &&
               payment_methods.all? { |type| type.is_a?(String) && !type.strip.empty? }
@@ -26,6 +26,7 @@ module Mpp
           @network_id = network_id
           @payment_methods = payment_methods
           @metadata = metadata
+          @external_id = external_id
           @currency = currency
           @recipient = network_id
           @decimals = decimals
@@ -41,7 +42,9 @@ module Mpp
           method_details["paymentMethodTypes"] = @payment_methods
           method_details["metadata"] = @metadata if @metadata
 
-          request.merge("methodDetails" => method_details)
+          transformed = request.merge("methodDetails" => method_details)
+          transformed["externalId"] = @external_id if !@external_id.nil? && !transformed.key?("externalId")
+          transformed
         end
       end
 
@@ -49,6 +52,7 @@ module Mpp
       def self.stripe(secret_key:, network_id:, payment_methods: nil,
         metadata: nil, currency: Defaults::DEFAULT_CURRENCY,
         decimals: Defaults::DEFAULT_DECIMALS,
+        external_id: nil,
         api_base: Defaults::STRIPE_API_BASE)
         charge_intent = ChargeIntent.new(secret_key: secret_key, api_base: api_base)
 
@@ -58,7 +62,8 @@ module Mpp
           payment_methods: payment_methods,
           metadata: metadata,
           currency: currency,
-          decimals: decimals
+          decimals: decimals,
+          external_id: external_id
         )
 
         method.intents = {"charge" => charge_intent}

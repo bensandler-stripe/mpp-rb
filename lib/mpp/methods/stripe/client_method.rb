@@ -29,7 +29,9 @@ module Mpp
           )
 
           payload = {"spt" => spt_id}
-          payload["externalId"] = @external_id if @external_id
+          request_external_id = request["externalId"]
+          payload["externalId"] = request_external_id if request_external_id.is_a?(String)
+          payload["externalId"] = @external_id if !payload.key?("externalId") && @external_id
 
           Mpp::Credential.new(
             challenge: challenge.to_echo,
