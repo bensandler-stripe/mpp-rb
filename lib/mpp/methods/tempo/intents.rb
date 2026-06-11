@@ -14,6 +14,8 @@ module Mpp
       TRANSFER_WITH_MEMO_SELECTOR = "95777d59"
       TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
       TRANSFER_WITH_MEMO_TOPIC = "0x57bc7354aa85aed339e000bccffabbc529466af35f0772c8f8ee1145927de7f0"
+      TRANSACTION_PENDING = "transaction:pending"
+      TRANSACTION_VERIFIED = "transaction:verified"
 
       # Tempo charge intent for server-side verification.
       class ChargeIntent
@@ -153,9 +155,12 @@ module Mpp
           if @store
             reserved_tx_hash = raw_transaction_hash(raw_tx)
             store_key = "mpp:charge:#{reserved_tx_hash.downcase}"
-            unless @store.put_if_absent(store_key, reserved_tx_hash)
+            unless @store.put_if_absent(store_key, TRANSACTION_PENDING)
+              raise Mpp::VerificationError, "Transaction hash already used" unless @store.get(store_key) == TRANSACTION_PENDING
+
               receipt_data = fetch_transaction_receipt(rpc_url, reserved_tx_hash)
               verify_transaction_receipt!(receipt_data, request, credential: credential)
+              @store.put(store_key, TRANSACTION_VERIFIED)
               return Mpp::Receipt.success(reserved_tx_hash)
             end
           end
@@ -164,6 +169,13 @@ module Mpp
           begin
             tx_hash = Rpc.call(rpc_url, "eth_sendRawTransaction", [raw_tx])
           rescue => e
+            if reserved_tx_hash && store_key && transaction_submission_may_have_succeeded?(e)
+              receipt_data = fetch_transaction_receipt(rpc_url, reserved_tx_hash)
+              verify_transaction_receipt!(receipt_data, request, credential: credential)
+              @store&.put(store_key, TRANSACTION_VERIFIED)
+              return Mpp::Receipt.success(reserved_tx_hash)
+            end
+
             @store.delete(store_key) if @store && store_key
             raise Mpp::VerificationError, "Transaction submission failed: #{e.message}"
           end
@@ -180,8 +192,20 @@ module Mpp
           tx_hash = reserved_tx_hash || tx_hash
           receipt_data = fetch_transaction_receipt(rpc_url, tx_hash)
           verify_transaction_receipt!(receipt_data, request, credential: credential)
+          @store.put(store_key, TRANSACTION_VERIFIED) if @store && store_key
 
           Mpp::Receipt.success(tx_hash)
+        end
+
+        def transaction_submission_may_have_succeeded?(error)
+          message = "#{error.class}: #{error.message}".downcase
+
+          message.include?("timeout") ||
+            message.include?("timed out") ||
+            message.include?("already known") ||
+            message.include?("already imported") ||
+            message.include?("known transaction") ||
+            message.include?("transaction already exists")
         end
 
         def fetch_transaction_receipt(rpc_url, tx_hash)
@@ -193,7 +217,10 @@ module Mpp
             sleep(RECEIPT_RETRY_DELAY_SECONDS) if attempt < MAX_RECEIPT_RETRY_ATTEMPTS - 1
           end
 
-          raise Mpp::VerificationError, "Transaction receipt not found after retries" unless receipt_data
+          unless receipt_data
+            raise Mpp::TransactionPendingError,
+              "Transaction receipt pending; retry verification later"
+          end
 
           receipt_data
         end

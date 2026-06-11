@@ -74,7 +74,7 @@ class TestTempoChargeIntent < Minitest::Test
     assert_equal HASH, result.reference
   end
 
-  def test_transaction_credential_duplicate_fetches_receipt_without_rebroadcast
+  def test_transaction_credential_replay_rejected_after_success
     raw_tx = "0xabcdef1234567890"
     tx_hash = raw_transaction_hash(raw_tx)
     challenge_id = "challenge-123"
@@ -94,7 +94,7 @@ class TestTempoChargeIntent < Minitest::Test
       case method
       when "eth_sendRawTransaction"
         assert_equal [raw_tx], params
-        assert_equal tx_hash, store.get("mpp:charge:#{tx_hash.downcase}")
+        assert_equal Mpp::Methods::Tempo::TRANSACTION_PENDING, store.get("mpp:charge:#{tx_hash.downcase}")
         tx_hash
       when "eth_getTransactionReceipt"
         assert_equal [tx_hash], params
@@ -104,18 +104,99 @@ class TestTempoChargeIntent < Minitest::Test
       end
     }) do
       first = intent.verify(credential, request_hash)
-      second = intent.verify(credential, request_hash)
-
       assert_equal tx_hash, first.reference
-      assert_equal tx_hash, second.reference
+
+      error = assert_raises(Mpp::VerificationError) do
+        intent.verify(credential, request_hash)
+      end
+      assert_match(/Transaction hash already used/, error.message)
     end
 
     methods = calls.map(&:first)
     assert_equal 1, methods.count("eth_sendRawTransaction")
-    assert_equal 2, methods.count("eth_getTransactionReceipt")
+    assert_equal 1, methods.count("eth_getTransactionReceipt")
   end
 
-  def test_transaction_credential_releases_reservation_on_broadcast_failure
+  def test_transaction_credential_duplicate_pending_raises_pending_without_rebroadcast
+    raw_tx = "0xabcdef1234567890"
+    tx_hash = raw_transaction_hash(raw_tx)
+    challenge_id = "challenge-123"
+    store = Mpp::MemoryStore.new
+    store.put("mpp:charge:#{tx_hash.downcase}", Mpp::Methods::Tempo::TRANSACTION_PENDING)
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test", store: store)
+    credential = transaction_credential(raw_tx, challenge_id: challenge_id)
+    calls = []
+
+    Mpp::Methods::Tempo::Rpc.stub(:call, ->(_rpc_url, method, params) {
+      calls << [method, params]
+
+      case method
+      when "eth_getTransactionReceipt"
+        assert_equal [tx_hash], params
+        nil
+      else
+        raise "unexpected RPC method: #{method}"
+      end
+    }) do
+      intent.stub(:sleep, ->(*_) {}) do
+        error = assert_raises(Mpp::TransactionPendingError) do
+          intent.verify(credential, request_hash)
+        end
+        assert_match(/pending/, error.message)
+      end
+    end
+
+    methods = calls.map(&:first)
+    assert_equal 0, methods.count("eth_sendRawTransaction")
+    assert_equal Mpp::Methods::Tempo::MAX_RECEIPT_RETRY_ATTEMPTS,
+      methods.count("eth_getTransactionReceipt")
+    assert_equal Mpp::Methods::Tempo::TRANSACTION_PENDING, store.get("mpp:charge:#{tx_hash.downcase}")
+  end
+
+  def test_transaction_credential_recovers_receipt_after_ambiguous_broadcast_error
+    raw_tx = "0xabcdef1234567890"
+    tx_hash = raw_transaction_hash(raw_tx)
+    challenge_id = "challenge-123"
+    memo = Mpp::Methods::Tempo::Attribution.encode(
+      server_id: REALM,
+      challenge_id: challenge_id
+    )
+    receipt_data = receipt([transfer_log(memo: memo)])
+    store = Mpp::MemoryStore.new
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test", store: store)
+    credential = transaction_credential(raw_tx, challenge_id: challenge_id)
+    calls = []
+
+    Mpp::Methods::Tempo::Rpc.stub(:call, ->(_rpc_url, method, params) {
+      calls << [method, params]
+
+      case method
+      when "eth_sendRawTransaction"
+        assert_equal [raw_tx], params
+        raise "already known"
+      when "eth_getTransactionReceipt"
+        assert_equal [tx_hash], params
+        receipt_data
+      else
+        raise "unexpected RPC method: #{method}"
+      end
+    }) do
+      result = intent.verify(credential, request_hash)
+      assert_equal tx_hash, result.reference
+
+      error = assert_raises(Mpp::VerificationError) do
+        intent.verify(credential, request_hash)
+      end
+      assert_match(/Transaction hash already used/, error.message)
+    end
+
+    methods = calls.map(&:first)
+    assert_equal 1, methods.count("eth_sendRawTransaction")
+    assert_equal 1, methods.count("eth_getTransactionReceipt")
+    assert_equal Mpp::Methods::Tempo::TRANSACTION_VERIFIED, store.get("mpp:charge:#{tx_hash.downcase}")
+  end
+
+  def test_transaction_credential_releases_reservation_on_definitive_broadcast_failure
     raw_tx = "0xabcdef1234567890"
     tx_hash = raw_transaction_hash(raw_tx)
     challenge_id = "challenge-123"
@@ -138,7 +219,7 @@ class TestTempoChargeIntent < Minitest::Test
         assert_equal [raw_tx], params
         if fail_broadcast
           fail_broadcast = false
-          raise "network down"
+          raise "insufficient funds"
         end
         tx_hash
       when "eth_getTransactionReceipt"
@@ -151,7 +232,7 @@ class TestTempoChargeIntent < Minitest::Test
       error = assert_raises(Mpp::VerificationError) do
         intent.verify(credential, request_hash)
       end
-      assert_match(/Transaction submission failed: network down/, error.message)
+      assert_match(/Transaction submission failed: insufficient funds/, error.message)
       assert_nil store.get("mpp:charge:#{tx_hash.downcase}")
 
       receipt = intent.verify(credential, request_hash)
