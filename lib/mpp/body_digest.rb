@@ -21,7 +21,7 @@ module Mpp
       when String
         # use as-is
       end
-      body = body.encode(Encoding::UTF_8) if body.is_a?(String)
+      body = body.b if body.is_a?(String)
       digest = OpenSSL::Digest::SHA256.digest(body)
       encoded = Base64.strict_encode64(digest)
       "sha-256=#{encoded}"

@@ -28,11 +28,14 @@ module Mpp
       sig { params(env: T.untyped).returns(T::Array[T.untyped]) }
       def call(env)
         authorization = env["HTTP_AUTHORIZATION"]
-        request_body = read_request_body(env)
+        body_capture = capture_request_body(env)
         status, headers, body = @app.call(env)
 
         charge_opts = env["mpp.charge"]
         return [status, headers, body] unless charge_opts
+
+        request_body = body_capture&.materialize
+        env["rack.input"] = StringIO.new(request_body || "") if body_capture
 
         amount = charge_opts[:amount]
         opts = charge_opts.except(:amount, :body)
@@ -69,14 +72,14 @@ module Mpp
 
       private
 
-      sig { params(env: T.untyped).returns(T.nilable(String)) }
-      def read_request_body(env)
+      sig { params(env: T.untyped).returns(T.nilable(RackInputCapture)) }
+      def capture_request_body(env)
         input = env["rack.input"]
         return nil unless input&.respond_to?(:read)
 
-        body = T.let(input.read || "", String)
-        env["rack.input"] = StringIO.new(body)
-        body.empty? ? nil : body
+        capture = RackInputCapture.new(input)
+        env["rack.input"] = capture
+        capture
       end
 
       sig { params(env: T.untyped).returns(T::Hash[String, String]) }
@@ -90,6 +93,57 @@ module Mpp
         query = env["QUERY_STRING"]
         scope["query"] = query if query.is_a?(String) && !query.empty?
         scope
+      end
+
+      class RackInputCapture
+        extend T::Sig
+
+        sig { params(input: T.untyped).void }
+        def initialize(input)
+          @input = T.let(input, T.untyped)
+          @buffer = T.let(+"".b, String)
+        end
+
+        sig { params(args: T.untyped).returns(T.untyped) }
+        def read(*args)
+          chunk = @input.read(*args)
+          @buffer << chunk.b if chunk && !chunk.empty?
+          chunk
+        end
+
+        sig { params(args: T.untyped).returns(T.untyped) }
+        def gets(*args)
+          chunk = @input.gets(*args)
+          @buffer << chunk.b if chunk && !chunk.empty?
+          chunk
+        end
+
+        sig { params(block: T.nilable(T.proc.params(chunk: T.untyped).void)).returns(T.untyped) }
+        def each(&block)
+          return enum_for(:each) unless block
+
+          @input.each do |chunk|
+            @buffer << chunk.b if chunk && !chunk.empty?
+            block.call(chunk)
+          end
+        end
+
+        sig { returns(T.untyped) }
+        def rewind
+          @input.rewind if @input.respond_to?(:rewind)
+          @buffer = +"".b
+        end
+
+        sig { returns(T.untyped) }
+        def close
+          @input.close if @input.respond_to?(:close)
+        end
+
+        sig { returns(T.nilable(String)) }
+        def materialize
+          read
+          @buffer.empty? ? nil : @buffer.dup
+        end
       end
     end
   end

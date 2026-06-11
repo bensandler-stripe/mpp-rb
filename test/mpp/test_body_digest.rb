@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "base64"
+require "openssl"
 
 class TestBodyDigest < Minitest::Test
   def test_compute_empty_string
@@ -46,5 +48,12 @@ class TestBodyDigest < Minitest::Test
     d2 = Mpp::BodyDigest.compute({"a" => "1", "b" => "2"})
 
     assert_equal d1, d2
+  end
+
+  def test_compute_uses_raw_binary_bytes
+    body = "{\"q\":\"café\"}".b
+    expected = Base64.strict_encode64(OpenSSL::Digest::SHA256.digest(body))
+
+    assert_equal "sha-256=#{expected}", Mpp::BodyDigest.compute(body)
   end
 end

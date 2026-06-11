@@ -20,6 +20,18 @@ class TestMiddleware < Minitest::Test
     assert_equal "text/plain", headers["Content-Type"]
   end
 
+  def test_does_not_read_request_body_when_no_charge
+    input = CountingInput.new("x" * 1024)
+    app = ->(_env) { [200, {}, ["OK"]] }
+    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler)
+
+    status, _headers, body = middleware.call(minimal_env.merge("rack.input" => input))
+
+    assert_equal 200, status
+    assert_equal ["OK"], body
+    assert_equal 0, input.reads
+  end
+
   def test_returns_402_when_charge_requested_without_auth
     app = lambda { |env|
       env["mpp.charge"] = {amount: "1.00"}
@@ -257,6 +269,20 @@ class TestMiddleware < Minitest::Test
     end
 
     def read(*args)
+      @input.read(*args)
+    end
+  end
+
+  class CountingInput
+    attr_reader :reads
+
+    def initialize(body)
+      @input = StringIO.new(body)
+      @reads = 0
+    end
+
+    def read(*args)
+      @reads += 1
       @input.read(*args)
     end
   end
