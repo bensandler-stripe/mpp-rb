@@ -139,7 +139,7 @@ class TestTempoTransaction < Minitest::Test
     intent = Mpp::Methods::Tempo::ChargeIntent.new
     Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
 
-    signed_raw = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
+    signed_raw, = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
     decoded = decode_raw_tx(signed_raw, 0x76)
 
     assert_equal CURRENCY.downcase.delete_prefix("0x"), decoded[10].unpack1("H*")
@@ -176,12 +176,17 @@ class TestTempoTransaction < Minitest::Test
     intent = Mpp::Methods::Tempo::ChargeIntent.new
     Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
 
-    signed_raw = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
+    signed_raw, payload = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
     decoded = decode_raw_tx(signed_raw, 0x76)
 
     assert_equal access_list, decoded[5]
     assert_equal 3, decoded[11].length
     assert_equal 65, decoded[13].bytesize
+
+    # The simulated tx must carry the same access list as the broadcast tx.
+    sim_access_list = payload.dig("blockStateCalls", 0, "calls", 0, "accessList")
+    assert_equal CURRENCY.downcase, sim_access_list.dig(0, "address").downcase
+    assert_equal ["0x#{"00" * 32}"], sim_access_list.dig(0, "storageKeys")
   end
 
   def test_charge_intent_rejects_non_allowlisted_fee_token
@@ -240,7 +245,97 @@ class TestTempoTransaction < Minitest::Test
     assert_includes error.message, "not allowed by fee payer policy"
   end
 
+  # The simulate payload must target the co-signed tx: the recovered sender as
+  # `from`, the sponsor fields the node needs (feeToken, feePayerSignature), the
+  # payment calls, the expiring nonceKey, the validity window, and validation off.
+  def test_cosign_returns_simulate_payload_with_sponsor_abi
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    _intent, payload, payer = cosign_fixture
+    tx_request = payload.dig("blockStateCalls", 0, "calls", 0)
+
+    assert_equal false, payload["validation"]
+    assert_equal "0x76", tx_request["type"]
+    # `from` must be the sender recovered from the co-signed tx.
+    assert_equal payer.address.downcase, tx_request["from"].downcase
+    assert_equal CURRENCY.downcase, tx_request["feeToken"].downcase
+    assert tx_request["feePayerSignature"].is_a?(Hash), "feePayerSignature must be present"
+    assert tx_request["nonceKey"].start_with?("0x"), "nonceKey must be a hex quantity"
+    assert tx_request["validBefore"].start_with?("0x"), "validBefore must be present"
+    assert_equal 1, tx_request["calls"].length
+    assert_equal CURRENCY.downcase, tx_request.dig("calls", 0, "to").downcase
+  end
+
+  # A reverting simulation must block the broadcast so we never pay gas for a
+  # failing transaction.
+  def test_simulate_before_broadcast_rejects_revert
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    intent, payload = cosign_fixture
+    revert = {"blocks" => [{"calls" => [{"status" => "0x0", "error" => {"message" => "execution reverted"}}]}]}
+
+    error = Mpp::Methods::Tempo::Rpc.stub(:call, ->(_url, method, _params) {
+      assert_equal "tempo_simulateV1", method
+      revert
+    }) do
+      assert_raises(Mpp::VerificationError) do
+        intent.send(:simulate_before_broadcast, payload, "https://rpc.example.test")
+      end
+    end
+    assert_includes error.message, "would revert"
+    assert_includes error.message, "execution reverted"
+  end
+
+  # A successful simulation must let the broadcast proceed.
+  def test_simulate_before_broadcast_accepts_success
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    intent, payload = cosign_fixture
+    success = {"blocks" => [{"calls" => [{"status" => "0x1"}]}]}
+
+    Mpp::Methods::Tempo::Rpc.stub(:call, ->(_url, _method, _params) { success }) do
+      assert_nil intent.send(:simulate_before_broadcast, payload, "https://rpc.example.test")
+    end
+  end
+
+  # If the simulation RPC itself errors, fail closed.
+  def test_simulate_before_broadcast_fails_closed_on_rpc_error
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    intent, payload = cosign_fixture
+
+    error = Mpp::Methods::Tempo::Rpc.stub(:call, ->(_url, _method, _params) { raise "node unavailable" }) do
+      assert_raises(Mpp::VerificationError) do
+        intent.send(:simulate_before_broadcast, payload, "https://rpc.example.test")
+      end
+    end
+    assert_includes error.message, "Pre-broadcast simulation failed"
+  end
+
   private
+
+  # Co-sign an awaiting-fee-payer envelope; returns [intent, simulate_payload, payer].
+  def cosign_fixture
+    payer = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
+    fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
+    raw_tx, = Mpp::Methods::Tempo::Transaction.build_signed_transfer(
+      account: payer,
+      chain_id: 42_431,
+      gas_limit: 1_000_000,
+      gas_price: 1,
+      nonce: 0,
+      nonce_key: (1 << 256) - 1,
+      currency: CURRENCY,
+      transfer_data: transfer_data,
+      valid_before: Time.now.to_i + 60,
+      awaiting_fee_payer: true
+    )
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test")
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
+
+    _signed_raw, payload = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
+    [intent, payload, payer]
+  end
 
   def transfer_data
     to_padded = RECIPIENT.delete_prefix("0x").downcase.rjust(64, "0")

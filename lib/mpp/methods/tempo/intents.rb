@@ -135,9 +135,12 @@ module Mpp
 
           raw_tx = payload.signature
 
+          # Simulation payload for the locally co-signed tx, if we sponsor it.
+          simulate_payload = nil
+
           if request.method_details.fee_payer
             if fee_payer
-              raw_tx = cosign_as_fee_payer(raw_tx, request.currency, request: request)
+              raw_tx, simulate_payload = cosign_as_fee_payer(raw_tx, request.currency, request: request)
             else
               fee_payer_url = request.method_details.fee_payer_url || Defaults::DEFAULT_FEE_PAYER_URL
               result = Rpc.call(fee_payer_url, "eth_signRawTransaction", [raw_tx])
@@ -148,6 +151,11 @@ module Mpp
           end
 
           rpc_url = get_rpc_url
+
+          # We pay the gas, so simulate the co-signed tx first and bail if it
+          # would revert. Fails closed: no simulation, no broadcast.
+          simulate_before_broadcast(simulate_payload, rpc_url) if simulate_payload
+
           tx_hash = Rpc.call(rpc_url, "eth_sendRawTransaction", [raw_tx])
           raise Mpp::VerificationError, "No transaction hash returned" unless tx_hash
 
@@ -459,7 +467,95 @@ module Mpp
           fee_payer_sig = fee_payer.sign_hash(fee_payer_hash)
 
           signed = tx_to_sign.with(fee_payer_signature: fee_payer_sig)
-          "0x#{signed.encoded_2718.unpack1("H*")}"
+          raw_tx = "0x#{signed.encoded_2718.unpack1("H*")}"
+
+          [raw_tx, build_simulate_payload(tx_to_sign, recovered_addr, fee_payer_sig)]
+        end
+
+        # Build a `tempo_simulateV1` payload for the co-signed `0x76` tx.
+        #
+        # Carries the recovered sender as `from` (the node needs it to model the
+        # sender) plus the sponsor fields (`feeToken`, `feePayerSignature`) so the
+        # node simulates the same tx we are about to broadcast.
+        def build_simulate_payload(tx, sender, fee_payer_sig)
+          tx_request = {
+            "from" => sender,
+            "type" => "0x76",
+            "chainId" => to_hex(tx.chain_id),
+            "nonce" => to_hex(tx.nonce),
+            "nonceKey" => to_hex(tx.nonce_key),
+            "gas" => to_hex(tx.gas_limit),
+            "maxFeePerGas" => to_hex(tx.max_fee_per_gas),
+            "maxPriorityFeePerGas" => to_hex(tx.max_priority_fee_per_gas),
+            "feeToken" => tx.fee_token,
+            "feePayerSignature" => signature_object(fee_payer_sig),
+            "calls" => tx.calls.map do |c|
+              {"to" => c.to, "value" => to_hex(c.value), "input" => c.data}
+            end
+          }
+          tx_request["validBefore"] = to_hex(tx.valid_before) if tx.valid_before
+          tx_request["validAfter"] = to_hex(tx.valid_after) if tx.valid_after
+          access_list = encode_access_list(tx.access_list)
+          tx_request["accessList"] = access_list unless access_list.empty?
+
+          {
+            "blockStateCalls" => [{"calls" => [tx_request]}],
+            # We only care about execution outcome, not mempool admission.
+            "validation" => false,
+            "traceTransfers" => false,
+            "returnFullTransactions" => false
+          }
+        end
+
+        # Simulate the co-signed tx and raise if it would revert. Fails closed:
+        # an RPC error is treated as a failed check, not a pass.
+        def simulate_before_broadcast(simulate_payload, rpc_url)
+          response =
+            begin
+              Rpc.call(rpc_url, "tempo_simulateV1", [simulate_payload])
+            rescue => e
+              raise Mpp::VerificationError, "Pre-broadcast simulation failed: #{e.message}"
+            end
+
+          call = response&.dig("blocks", 0, "calls", 0)
+          raise Mpp::VerificationError, "Pre-broadcast simulation returned no call results" unless call
+
+          status = call["status"]
+          succeeded = status == "0x1" || status == 1 || status == true
+          return if succeeded
+
+          detail = call.dig("error", "message") || "no revert reason returned"
+          raise Mpp::VerificationError,
+            "Sponsored transaction would revert in pre-broadcast simulation: #{detail}"
+        end
+
+        # Encode an integer as a 0x-prefixed hex quantity.
+        def to_hex(value)
+          "0x#{Integer(value).to_s(16)}"
+        end
+
+        # Convert the RLP-decoded access list ([addr_bytes, [key_bytes, ...]])
+        # into the JSON shape the node expects.
+        def encode_access_list(access_list)
+          (access_list || []).map do |address, keys|
+            {
+              "address" => "0x#{address.unpack1("H*")}",
+              "storageKeys" => (keys || []).map { |k| "0x#{k.unpack1("H*")}" }
+            }
+          end
+        end
+
+        # Split a 65-byte (r||s||v) signature into the {r, s, yParity} object the
+        # node expects for `feePayerSignature`.
+        def signature_object(sig)
+          bytes = sig.b
+          v = bytes.getbyte(64)
+          parity = (v >= 27) ? v - 27 : v
+          {
+            "r" => "0x#{bytes[0, 32].unpack1("H*")}",
+            "s" => "0x#{bytes[32, 32].unpack1("H*")}",
+            "yParity" => to_hex(parity)
+          }
         end
       end
     end
