@@ -244,6 +244,33 @@ class TestTempoChargeIntent < Minitest::Test
     assert_equal 1, methods.count("eth_getTransactionReceipt")
   end
 
+  def test_transaction_credential_releases_reservation_on_returned_hash_mismatch
+    raw_tx = "0xabcdef1234567890"
+    tx_hash = raw_transaction_hash(raw_tx)
+    wrong_tx_hash = "0x#{"12" * 32}"
+    challenge_id = "challenge-123"
+    store = Mpp::MemoryStore.new
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test", store: store)
+    credential = transaction_credential(raw_tx, challenge_id: challenge_id)
+
+    Mpp::Methods::Tempo::Rpc.stub(:call, ->(_rpc_url, method, params) {
+      case method
+      when "eth_sendRawTransaction"
+        assert_equal [raw_tx], params
+        wrong_tx_hash
+      else
+        raise "unexpected RPC method: #{method}"
+      end
+    }) do
+      error = assert_raises(Mpp::VerificationError) do
+        intent.verify(credential, request_hash)
+      end
+      assert_match(/Returned transaction hash does not match/, error.message)
+    end
+
+    assert_nil store.get("mpp:charge:#{tx_hash.downcase}")
+  end
+
   def test_proof_credential_replay_rejected
     account = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
     chain_id = 4217

@@ -186,6 +186,7 @@ module Mpp
           end
 
           if reserved_tx_hash && tx_hash.downcase != reserved_tx_hash.downcase
+            @store.delete(store_key) if @store && store_key
             raise Mpp::VerificationError, "Returned transaction hash does not match submitted transaction"
           end
 
