@@ -170,6 +170,30 @@ class TestStripeMethod < Minitest::Test
     assert_equal "server-order-123", credential.payload["externalId"]
   end
 
+  def test_client_method_rejects_local_external_id_without_request_binding
+    method = Mpp::Methods::Stripe::ClientMethod.new(
+      create_spt: ->(**_params) { "spt_test123" },
+      external_id: "client-order-999",
+      payment_method: "pm_card_visa"
+    )
+    challenge = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "test-realm",
+      method: "stripe",
+      intent: "charge",
+      request: {
+        "amount" => "100",
+        "currency" => "usd",
+        "methodDetails" => {"networkId" => "acct_test123", "paymentMethodTypes" => ["card"]}
+      }
+    )
+
+    err = assert_raises(ArgumentError) do
+      method.create_credential(challenge)
+    end
+    assert_match(/external_id must be bound/, err.message)
+  end
+
   def test_integration_challenge_round_trip
     method = Mpp::Methods::Stripe.stripe(
       secret_key: "sk_test_fake",

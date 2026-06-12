@@ -31,7 +31,9 @@ module Mpp
           payload = {"spt" => spt_id}
           request_external_id = request["externalId"]
           payload["externalId"] = request_external_id if request_external_id.is_a?(String)
-          payload["externalId"] = @external_id if !payload.key?("externalId") && @external_id
+          if @external_id && !payload.key?("externalId")
+            raise ArgumentError, "external_id must be bound by the challenge request"
+          end
 
           Mpp::Credential.new(
             challenge: challenge.to_echo,

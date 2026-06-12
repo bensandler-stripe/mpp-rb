@@ -3,6 +3,7 @@
 
 require "test_helper"
 require "json"
+require "tmpdir"
 
 class TestStripeChargeIntent < Minitest::Test
   FakePaymentIntents = Struct.new(:result, :error, :assertion, :calls, keyword_init: true) do
@@ -29,6 +30,42 @@ class TestStripeChargeIntent < Minitest::Test
   def intent_with_payment_intents(payment_intents)
     client = Struct.new(:v1).new(Struct.new(:payment_intents).new(payment_intents))
     Mpp::Methods::Stripe::ChargeIntent.new(secret_key: "sk_test_fake", client: client)
+  end
+
+  def with_fake_stripe_client(payment_intents)
+    created_secret_keys = []
+    previous_stripe = nil
+    previous_stripe = Object.const_get(:Stripe) if Object.const_defined?(:Stripe, false)
+    Object.send(:remove_const, :Stripe) if Object.const_defined?(:Stripe, false)
+
+    fake_client = Class.new do
+      define_method(:initialize) do |secret_key|
+        created_secret_keys << secret_key
+      end
+
+      define_method(:v1) do
+        Struct.new(:payment_intents).new(payment_intents)
+      end
+    end
+
+    fake_stripe = Module.new
+    fake_stripe.const_set(:StripeClient, fake_client)
+    Object.const_set(:Stripe, fake_stripe)
+
+    Dir.mktmpdir do |dir|
+      fake_stripe_path = File.join(dir, "stripe.rb")
+      File.write(fake_stripe_path, "# fake stripe for tests\n")
+      $LOAD_PATH.unshift(dir)
+      begin
+        yield created_secret_keys
+      ensure
+        $LOAD_PATH.delete(dir)
+        $LOADED_FEATURES.delete(fake_stripe_path)
+      end
+    end
+  ensure
+    Object.send(:remove_const, :Stripe) if Object.const_defined?(:Stripe, false)
+    Object.const_set(:Stripe, previous_stripe) if previous_stripe
   end
 
   def make_credential(payload:, expires: nil)
@@ -109,6 +146,26 @@ class TestStripeChargeIntent < Minitest::Test
     assert_equal "stripe", receipt.method
     assert_equal "ext_1", receipt.external_id
     assert_equal 1, payment_intents.calls.length
+  end
+
+  def test_verify_constructs_stripe_client_when_not_injected
+    credential = make_credential(payload: {"spt" => "spt_test123", "externalId" => "ext_1"})
+    request = make_request(
+      payment_method_types: ["card"],
+      external_id: "ext_1"
+    )
+
+    mock_result = Struct.new(:id, :status).new("pi_abc123", "succeeded")
+    payment_intents = FakePaymentIntents.new(result: mock_result)
+
+    with_fake_stripe_client(payment_intents) do |created_secret_keys|
+      receipt = @intent.verify(credential, request)
+
+      assert_equal ["sk_test_fake"], created_secret_keys
+      assert_equal "pi_abc123", receipt.reference
+      assert_equal "ext_1", receipt.external_id
+      assert_equal 1, payment_intents.calls.length
+    end
   end
 
   def test_verify_rejects_forged_external_id
