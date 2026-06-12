@@ -189,6 +189,74 @@ class TestTempoTransaction < Minitest::Test
     assert_equal ["0x#{"00" * 32}"], sim_access_list.dig(0, "storageKeys")
   end
 
+  def test_charge_intent_rejects_tempo_authorization_list
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    payer = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
+    fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
+    tx = Mpp::Methods::Tempo::Transaction::SignedTransaction.new(
+      chain_id: 42_431,
+      max_priority_fee_per_gas: 1,
+      max_fee_per_gas: 1,
+      gas_limit: 1_000_000,
+      calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_data)],
+      access_list: [],
+      nonce_key: (1 << 256) - 1,
+      nonce: 0,
+      valid_before: Time.now.to_i + 60,
+      valid_after: nil,
+      fee_token: nil,
+      sender_signature: nil,
+      fee_payer_signature: Mpp::Methods::Tempo::Transaction::EMPTY_SIGNATURE,
+      sender_address: payer.address,
+      tempo_authorization_list: [[pack_hex(CURRENCY)]],
+      key_authorization: nil
+    )
+    sender_signature = payer.sign_hash(tx.signature_hash)
+    raw_tx = "0x#{Mpp::Methods::Tempo::FeePayer.encode(tx.with(sender_signature: sender_signature)).unpack1("H*")}"
+    intent = Mpp::Methods::Tempo::ChargeIntent.new
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
+    end
+    assert_includes error.message, "tempo_authorization_list"
+  end
+
+  def test_charge_intent_rejects_key_authorization
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    payer = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
+    fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
+    tx = Mpp::Methods::Tempo::Transaction::SignedTransaction.new(
+      chain_id: 42_431,
+      max_priority_fee_per_gas: 1,
+      max_fee_per_gas: 1,
+      gas_limit: 1_000_000,
+      calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_data)],
+      access_list: [],
+      nonce_key: (1 << 256) - 1,
+      nonce: 0,
+      valid_before: Time.now.to_i + 60,
+      valid_after: nil,
+      fee_token: nil,
+      sender_signature: nil,
+      fee_payer_signature: Mpp::Methods::Tempo::Transaction::EMPTY_SIGNATURE,
+      sender_address: payer.address,
+      tempo_authorization_list: [],
+      key_authorization: RLP.encode([pack_hex(CURRENCY)])
+    )
+    sender_signature = payer.sign_hash(tx.signature_hash)
+    raw_tx = "0x#{Mpp::Methods::Tempo::FeePayer.encode(tx.with(sender_signature: sender_signature)).unpack1("H*")}"
+    intent = Mpp::Methods::Tempo::ChargeIntent.new
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
+    end
+    assert_includes error.message, "key_authorization"
+  end
+
   def test_charge_intent_rejects_non_allowlisted_fee_token
     skip "eth/rlp gems not available" unless eth_and_rlp_available?
 

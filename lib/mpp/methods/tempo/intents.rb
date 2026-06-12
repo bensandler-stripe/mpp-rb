@@ -394,6 +394,18 @@ module Mpp
             raise Mpp::VerificationError, "Fee payer transaction must not include fee_token (server sets it)"
           end
 
+          # Reject authorizations we can't replay in tempo_simulateV1, which
+          # would let preflight validate a different tx than we broadcast.
+          tempo_authorization_list = decoded[12]
+          if tempo_authorization_list.is_a?(Array) && !tempo_authorization_list.empty?
+            raise Mpp::VerificationError,
+              "Fee payer envelope must not include tempo_authorization_list (cannot be safely pre-simulated)"
+          end
+          unless key_auth.nil?
+            raise Mpp::VerificationError,
+              "Fee payer envelope must not include key_authorization (cannot be safely pre-simulated)"
+          end
+
           nonce_key = int.call(decoded[6])
           unless nonce_key == (1 << 256) - 1
             raise Mpp::VerificationError, "Fee payer envelope must use expiring nonce key (U256::MAX)"
