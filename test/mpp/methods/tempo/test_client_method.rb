@@ -193,4 +193,17 @@ class TestTempoChainPinning < Minitest::Test
 
     assert_equal "did:pkh:eip155:42431:#{RECIPIENT}", credential.source
   end
+
+  def test_custom_chain_string_pin_normalizes_downstream
+    # Custom chain (not in CHAIN_RPC_URLS) with a String pin: the normalized
+    # integer must reach the downstream check so a matching chain is not rejected.
+    method = make_method(chain_id: "99999")
+    challenge = make_challenge(chain_id: 99_999)
+
+    credential = with_stubbed_transfer(method, source_chain_id: 99_999, expected_chain_id: 99_999) do
+      method.create_credential(challenge)
+    end
+
+    assert_equal "did:pkh:eip155:99999:#{RECIPIENT}", credential.source
+  end
 end
