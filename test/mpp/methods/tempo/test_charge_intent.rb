@@ -271,6 +271,46 @@ class TestTempoChargeIntent < Minitest::Test
     assert_nil store.get("mpp:charge:#{tx_hash.downcase}")
   end
 
+  def test_transaction_credential_releases_reservation_on_simulation_failure
+    raw_tx = "0xabcdef1234567890"
+    tx_hash = raw_transaction_hash(raw_tx)
+    challenge_id = "challenge-123"
+    store = Mpp::MemoryStore.new
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test", store: store)
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: Object.new)
+    credential = transaction_credential(raw_tx, challenge_id: challenge_id)
+    request = request_hash.merge("methodDetails" => {"feePayer" => true, "chainId" => CHAIN_ID})
+    calls = []
+
+    cosign = lambda do |submitted_raw_tx, _fee_token, request: nil, challenge: nil|
+      assert_equal raw_tx, submitted_raw_tx
+      assert request
+      assert challenge
+      [submitted_raw_tx, {"simulate" => true}]
+    end
+    simulate = lambda do |_simulate_payload, _rpc_url|
+      assert_equal Mpp::Methods::Tempo::TRANSACTION_PENDING, store.get("mpp:charge:#{tx_hash.downcase}")
+      raise Mpp::VerificationError, "simulation failed"
+    end
+
+    Mpp::Methods::Tempo::Rpc.stub(:call, ->(_rpc_url, method, params) {
+      calls << [method, params]
+      raise "unexpected RPC method: #{method}"
+    }) do
+      intent.stub(:cosign_as_fee_payer, cosign) do
+        intent.stub(:simulate_before_broadcast, simulate) do
+          error = assert_raises(Mpp::VerificationError) do
+            intent.verify(credential, request)
+          end
+          assert_match(/simulation failed/, error.message)
+        end
+      end
+    end
+
+    assert_empty calls
+    assert_nil store.get("mpp:charge:#{tx_hash.downcase}")
+  end
+
   def test_proof_credential_replay_rejected
     account = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
     chain_id = 4217
@@ -279,7 +319,8 @@ class TestTempoChargeIntent < Minitest::Test
     signature = Mpp::Methods::Tempo::Proof.sign(
       account: account,
       chain_id: chain_id,
-      challenge_id: challenge_id
+      challenge_id: challenge_id,
+      realm: REALM
     )
 
     credential = Mpp::Credential.new(
