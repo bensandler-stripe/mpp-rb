@@ -58,18 +58,28 @@ module Mpp
       Mpp::Parsing.parse_www_authenticate(header)
     end
 
-    # Parse multiple Payment challenges from a merged WWW-Authenticate header.
-    # Handles RFC 9110 §11.6.1 comma-separated authentication schemes.
-    def self.from_www_authenticate_list(header)
+    # Split a merged WWW-Authenticate header value into the individual
+    # `Payment ...` challenge chunks it contains, handling RFC 9110 §11.6.1
+    # comma-separated authentication schemes. Returns the raw chunk strings so
+    # callers can parse each challenge independently; a malformed chunk then
+    # does not prevent the remaining chunks from being considered.
+    def self.www_authenticate_chunks(header)
       indices = []
       header.scan(/Payment\s+/i) { indices << T.must(Regexp.last_match).begin(0) }
       return [] if indices.empty?
 
       indices.each_with_index.map do |start_idx, i|
         end_idx = (i + 1 < indices.length) ? indices[i + 1] : header.length
-        chunk = T.must(header[start_idx...end_idx]).sub(/,\s*$/, "")
-        from_www_authenticate(chunk)
+        T.must(header[start_idx...end_idx]).sub(/,\s*$/, "")
       end
+    end
+
+    # Parse every Payment challenge from a merged WWW-Authenticate header.
+    # Raises Mpp::ParseError on the first malformed chunk; callers that need to
+    # tolerate a malformed challenge among valid ones should iterate
+    # `www_authenticate_chunks` and parse each chunk independently instead.
+    def self.from_www_authenticate_list(header)
+      www_authenticate_chunks(header).map { |chunk| from_www_authenticate(chunk) }
     end
 
     # Serialize to a WWW-Authenticate header value.

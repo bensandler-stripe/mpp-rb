@@ -205,18 +205,22 @@ module Mpp
       sig { params(www_auth_headers: T.untyped, input: T.untyped, response: T.untyped).returns(T::Array[T.untyped]) }
       def find_matching_challenge(www_auth_headers, input: nil, response: nil)
         www_auth_headers.each do |header|
-          Mpp::Challenge.from_www_authenticate_list(header).each do |parsed|
+          Mpp::Challenge.www_authenticate_chunks(header).each do |chunk|
+            parsed = Mpp::Challenge.from_www_authenticate(chunk)
             return [parsed, @methods[parsed.method]] if @methods.key?(parsed.method)
+          rescue Mpp::ParseError => e
+            # Skip a malformed challenge but keep scanning the rest: a bad chunk
+            # earlier in a merged value must not hide a supported challenge that
+            # follows it.
+            if @events.has_handlers?(Mpp::Events::PAYMENT_FAILED)
+              @events.emit(Mpp::Events::PAYMENT_FAILED, {
+                error: e,
+                input: input,
+                response: response
+              })
+            end
+            next
           end
-        rescue Mpp::ParseError => e
-          if @events.has_handlers?(Mpp::Events::PAYMENT_FAILED)
-            @events.emit(Mpp::Events::PAYMENT_FAILED, {
-              error: e,
-              input: input,
-              response: response
-            })
-          end
-          next
         end
         [nil, nil]
       end
