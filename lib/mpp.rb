@@ -58,6 +58,7 @@ module Mpp
   autoload :PaymentActionRequiredError, "mpp/errors"
   autoload :BadRequestError, "mpp/errors"
   autoload :VerificationError, "mpp/errors"
+  autoload :TransactionPendingError, "mpp/errors"
   autoload :ParseError, "mpp/errors"
   autoload :InsufficientBalanceError, "mpp/errors"
   autoload :InvalidSignatureError, "mpp/errors"

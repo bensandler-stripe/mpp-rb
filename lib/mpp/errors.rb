@@ -10,6 +10,9 @@ module Mpp
   # Base verification error.
   class VerificationError < StandardError; end
 
+  # Retryable verification error for transactions that were accepted but not mined yet.
+  class TransactionPendingError < VerificationError; end
+
   # Base class for all payment-related errors with RFC 9457 support.
   class PaymentError < StandardError
     extend T::Sig

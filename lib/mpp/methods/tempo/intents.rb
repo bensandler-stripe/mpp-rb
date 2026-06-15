@@ -14,6 +14,8 @@ module Mpp
       TRANSFER_WITH_MEMO_SELECTOR = "95777d59"
       TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
       TRANSFER_WITH_MEMO_TOPIC = "0x57bc7354aa85aed339e000bccffabbc529466af35f0772c8f8ee1145927de7f0"
+      TRANSACTION_PENDING = "transaction:pending"
+      TRANSACTION_VERIFIED = "transaction:verified"
 
       # Tempo charge intent for server-side verification.
       class ChargeIntent
@@ -151,14 +153,75 @@ module Mpp
           end
 
           rpc_url = get_rpc_url
+          reserved_tx_hash = T.let(nil, T.nilable(String))
+          store_key = T.let(nil, T.nilable(String))
+          if @store
+            reserved_tx_hash = raw_transaction_hash(raw_tx)
+            store_key = "mpp:charge:#{reserved_tx_hash.downcase}"
+            unless @store.put_if_absent(store_key, TRANSACTION_PENDING)
+              raise Mpp::VerificationError, "Transaction hash already used" unless @store.get(store_key) == TRANSACTION_PENDING
+
+              receipt_data = fetch_transaction_receipt(rpc_url, reserved_tx_hash)
+              verify_transaction_receipt!(receipt_data, request, credential: credential)
+              @store.put(store_key, TRANSACTION_VERIFIED)
+              return Mpp::Receipt.success(reserved_tx_hash)
+            end
+          end
 
           # We pay the gas, so simulate the co-signed tx first and bail if it
           # would revert. Fails closed: no simulation, no broadcast.
-          simulate_before_broadcast(simulate_payload, rpc_url) if simulate_payload
+          begin
+            simulate_before_broadcast(simulate_payload, rpc_url) if simulate_payload
+          rescue
+            @store.delete(store_key) if @store && store_key
+            raise
+          end
 
-          tx_hash = Rpc.call(rpc_url, "eth_sendRawTransaction", [raw_tx])
-          raise Mpp::VerificationError, "No transaction hash returned" unless tx_hash
+          tx_hash = T.let(nil, T.nilable(String))
+          begin
+            tx_hash = Rpc.call(rpc_url, "eth_sendRawTransaction", [raw_tx])
+          rescue => e
+            if reserved_tx_hash && store_key && transaction_submission_may_have_succeeded?(e)
+              receipt_data = fetch_transaction_receipt(rpc_url, reserved_tx_hash)
+              verify_transaction_receipt!(receipt_data, request, credential: credential)
+              @store&.put(store_key, TRANSACTION_VERIFIED)
+              return Mpp::Receipt.success(reserved_tx_hash)
+            end
 
+            @store.delete(store_key) if @store && store_key
+            raise Mpp::VerificationError, "Transaction submission failed: #{e.message}"
+          end
+
+          unless tx_hash
+            @store.delete(store_key) if @store && store_key
+            raise Mpp::VerificationError, "No transaction hash returned"
+          end
+
+          if reserved_tx_hash && tx_hash.downcase != reserved_tx_hash.downcase
+            @store.delete(store_key) if @store && store_key
+            raise Mpp::VerificationError, "Returned transaction hash does not match submitted transaction"
+          end
+
+          tx_hash = reserved_tx_hash || tx_hash
+          receipt_data = fetch_transaction_receipt(rpc_url, tx_hash)
+          verify_transaction_receipt!(receipt_data, request, credential: credential)
+          @store.put(store_key, TRANSACTION_VERIFIED) if @store && store_key
+
+          Mpp::Receipt.success(tx_hash)
+        end
+
+        def transaction_submission_may_have_succeeded?(error)
+          message = "#{error.class}: #{error.message}".downcase
+
+          message.include?("timeout") ||
+            message.include?("timed out") ||
+            message.include?("already known") ||
+            message.include?("already imported") ||
+            message.include?("known transaction") ||
+            message.include?("transaction already exists")
+        end
+
+        def fetch_transaction_receipt(rpc_url, tx_hash)
           receipt_data = T.let(nil, T.untyped)
           MAX_RECEIPT_RETRY_ATTEMPTS.times do |attempt|
             receipt_data = Rpc.call(rpc_url, "eth_getTransactionReceipt", [tx_hash])
@@ -167,7 +230,15 @@ module Mpp
             sleep(RECEIPT_RETRY_DELAY_SECONDS) if attempt < MAX_RECEIPT_RETRY_ATTEMPTS - 1
           end
 
-          raise Mpp::VerificationError, "Transaction receipt not found after retries" unless receipt_data
+          unless receipt_data
+            raise Mpp::TransactionPendingError,
+              "Transaction receipt pending; retry verification later"
+          end
+
+          receipt_data
+        end
+
+        def verify_transaction_receipt!(receipt_data, request, credential:)
           raise Mpp::VerificationError, "Transaction reverted" unless receipt_data["status"] == "0x1"
           matched_logs = match_transfer_logs(receipt_data, request, expected_sender: receipt_data["from"])
           unless matched_logs.any?
@@ -175,8 +246,6 @@ module Mpp
               "Transaction must contain a Transfer log matching request parameters"
           end
           assert_challenge_bound_memo(matched_logs, credential.challenge) unless request.method_details.memo
-
-          Mpp::Receipt.success(tx_hash)
         end
 
         def verify_transfer_logs(receipt, request, expected_sender: nil)
@@ -312,6 +381,20 @@ module Mpp
           end
 
           raise Mpp::VerificationError, "Invalid transaction: no matching payment call found" unless found
+        end
+
+        def raw_transaction_hash(raw_tx)
+          Kernel.require "eth"
+
+          hex = raw_tx.delete_prefix("0x")
+          unless hex.match?(/\A[0-9a-fA-F]+\z/) && hex.length.even?
+            raise Mpp::VerificationError, "Invalid transaction signature"
+          end
+
+          "0x#{Eth::Util.keccak256([hex].pack("H*")).unpack1("H*")}"
+        rescue LoadError
+          raise Mpp::VerificationError,
+            "eth gem is required to compute transaction hash for transaction replay protection"
         end
 
         def match_transfer_calldata(call_data_hex, request, challenge: nil)
