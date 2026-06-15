@@ -6,16 +6,16 @@ module Mpp
     module Tempo
       # EIP-712 proof credentials for zero-amount challenges.
       #
-      # Domain: { name: "MPP", version: "1", chainId }
-      # Types:  { Proof: [{ name: "challengeId", type: "string" }] }
-      # Message: { challengeId: <challenge.id> }
+      # Domain: { name: "MPP", version: "2", chainId }
+      # Types:  { Proof: [{ name: "challengeId", type: "string" }, { name: "realm", type: "string" }] }
+      # Message: { challengeId: <challenge.id>, realm: <challenge.realm> }
       module Proof
         DOMAIN_NAME = "MPP"
-        DOMAIN_VERSION = "1"
+        DOMAIN_VERSION = "2"
 
         # EIP-712 domain separator type hash
         DOMAIN_TYPE_HASH = "EIP712Domain(string name,string version,uint256 chainId)"
-        PROOF_TYPE_HASH = "Proof(string challengeId)"
+        PROOF_TYPE_HASH = "Proof(string challengeId,string realm)"
 
         module_function
 
@@ -36,35 +36,36 @@ module Mpp
           )
         end
 
-        # Compute the EIP-712 struct hash for Proof(challengeId).
-        def struct_hash(challenge_id)
+        # Compute the EIP-712 struct hash for Proof(challengeId, realm).
+        def struct_hash(challenge_id, realm)
           keccak256(
             abi_encode(
               keccak256(PROOF_TYPE_HASH),
-              keccak256(challenge_id)
+              keccak256(challenge_id),
+              keccak256(realm)
             )
           )
         end
 
         # Compute the full EIP-712 signing hash.
-        def signing_hash(chain_id:, challenge_id:)
+        def signing_hash(chain_id:, challenge_id:, realm:)
           keccak256(
-            "\x19\x01".b + domain_separator(chain_id) + struct_hash(challenge_id)
+            "\x19\x01".b + domain_separator(chain_id) + struct_hash(challenge_id, realm)
           )
         end
 
         # Sign a proof credential (client-side).
-        def sign(account:, chain_id:, challenge_id:)
-          hash = signing_hash(chain_id: chain_id, challenge_id: challenge_id)
+        def sign(account:, chain_id:, challenge_id:, realm:)
+          hash = signing_hash(chain_id: chain_id, challenge_id: challenge_id, realm: realm)
           sig = account.sign_hash(hash)
           "0x#{sig.unpack1("H*")}"
         end
 
         # Verify a proof credential signature (server-side).
-        def verify(address:, chain_id:, challenge_id:, signature:)
+        def verify(address:, chain_id:, challenge_id:, realm:, signature:)
           Kernel.require "eth"
 
-          hash = signing_hash(chain_id: chain_id, challenge_id: challenge_id)
+          hash = signing_hash(chain_id: chain_id, challenge_id: challenge_id, realm: realm)
           sig_bytes = [signature.delete_prefix("0x")].pack("H*")
 
           # Recover the signer address from the signature
@@ -106,7 +107,10 @@ module Mpp
         end
 
         def uint256(value)
-          [value].pack("Q>").rjust(32, "\x00".b)
+          value = Integer(value)
+          raise ArgumentError, "uint256 out of range" if value.negative? || value >= (1 << 256)
+
+          [value.to_s(16).rjust(64, "0")].pack("H*")
         end
 
         def recover_address(hash, sig_bytes)
