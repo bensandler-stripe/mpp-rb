@@ -500,11 +500,24 @@ module Mpp
             "maxFeePerGas" => to_hex(tx.max_fee_per_gas),
             "maxPriorityFeePerGas" => to_hex(tx.max_priority_fee_per_gas),
             "feeToken" => tx.fee_token,
-            "feePayerSignature" => signature_object(fee_payer_sig),
-            "calls" => tx.calls.map do |c|
+            "feePayerSignature" => signature_object(fee_payer_sig)
+          }
+
+          # The node forces `to = CREATE` when a request has no top-level `to`,
+          # appending a phantom CREATE call that trips Tempo's batch rules. Carry
+          # the final call via the top-level `to`/`value`/`input` shorthand (the
+          # builder appends it last, preserving order); keep earlier calls in `calls`.
+          raise Mpp::VerificationError, "Cannot simulate transaction with no calls" if tx.calls.empty?
+          *head_calls, last_call = tx.calls
+          unless head_calls.empty?
+            tx_request["calls"] = head_calls.map do |c|
               {"to" => c.to, "value" => to_hex(c.value), "input" => c.data}
             end
-          }
+          end
+          tx_request["to"] = last_call.to
+          tx_request["value"] = to_hex(last_call.value)
+          tx_request["input"] = last_call.data
+
           tx_request["validBefore"] = to_hex(tx.valid_before) if tx.valid_before
           tx_request["validAfter"] = to_hex(tx.valid_after) if tx.valid_after
           access_list = encode_access_list(tx.access_list)

@@ -330,8 +330,12 @@ class TestTempoTransaction < Minitest::Test
     assert tx_request["feePayerSignature"].is_a?(Hash), "feePayerSignature must be present"
     assert tx_request["nonceKey"].start_with?("0x"), "nonceKey must be a hex quantity"
     assert tx_request["validBefore"].start_with?("0x"), "validBefore must be present"
-    assert_equal 1, tx_request["calls"].length
-    assert_equal CURRENCY.downcase, tx_request.dig("calls", 0, "to").downcase
+    # Single call is carried via the top-level to/value/input shorthand (not the
+    # `calls` array) to avoid the node injecting a phantom CREATE call after it.
+    assert_nil tx_request["calls"]
+    assert_equal CURRENCY.downcase, tx_request["to"].downcase
+    assert_equal "0x0", tx_request["value"]
+    assert tx_request["input"].start_with?("0xa9059cbb"), "input must be the transfer calldata"
   end
 
   # A reverting simulation must block the broadcast so we never pay gas for a
