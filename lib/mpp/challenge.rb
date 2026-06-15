@@ -61,15 +61,11 @@ module Mpp
     # Parse multiple Payment challenges from a merged WWW-Authenticate header.
     # Handles RFC 9110 §11.6.1 comma-separated authentication schemes.
     def self.from_www_authenticate_list(header)
-      indices = payment_scheme_indices(header)
-      return [] if indices.empty?
-
-      indices.each_with_index.map do |start_idx, i|
-        end_idx = if i + 1 < indices.length
-          indices[i + 1]
-        else
-          next_auth_scheme_index(header, start_idx + "Payment".length) || header.length
-        end
+      payment_scheme_indices(header).map do |start_idx|
+        # End each chunk at the next scheme boundary of any kind, so an
+        # interleaved non-Payment scheme (e.g. "Payment ..., Bearer ...,
+        # Payment ...") is not folded into the preceding Payment challenge.
+        end_idx = next_auth_scheme_index(header, start_idx + "Payment".length) || header.length
         chunk = T.must(header[start_idx...end_idx]).sub(/,\s*$/, "")
         from_www_authenticate(chunk)
       end

@@ -308,6 +308,26 @@ class TestParsing < Minitest::Test
     assert_equal "tempo", result[0].method
   end
 
+  def test_from_www_authenticate_list_ignores_interleaved_non_payment_scheme
+    first = Mpp::Challenge.create(secret_key: "s", realm: "api.example.com", method: "tempo",
+      intent: "charge", request: {"amount" => "1"})
+    second = Mpp::Challenge.create(secret_key: "s", realm: "api.example.com", method: "tempo",
+      intent: "charge", request: {"amount" => "2"})
+    header = [
+      first.to_www_authenticate("api.example.com"),
+      'Bearer realm="fallback"',
+      second.to_www_authenticate("api.example.com")
+    ].join(", ")
+
+    result = Mpp::Challenge.from_www_authenticate_list(header)
+
+    # The interleaved Bearer scheme must terminate the first chunk rather than
+    # folding into it (which would surface as a duplicate realm parse error).
+    assert_equal 2, result.length
+    assert_equal first.id, result[0].id
+    assert_equal second.id, result[1].id
+  end
+
   def test_from_www_authenticate_list_empty
     assert_equal [], Mpp::Challenge.from_www_authenticate_list("Bearer token123")
     assert_equal [], Mpp::Challenge.from_www_authenticate_list("")
