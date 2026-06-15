@@ -63,9 +63,10 @@ module Mpp
       end
 
       # Handle a charge intent.
-      sig { params(authorization: T.nilable(String), amount: String, currency: T.nilable(String), recipient: T.nilable(String), expires: T.nilable(String), description: T.nilable(String), external_id: T.nilable(String), memo: T.nilable(String), fee_payer: T::Boolean, chain_id: T.nilable(Integer), extra: T.nilable(T::Hash[String, String])).returns(T.untyped) }
+      sig { params(authorization: T.nilable(String), amount: String, currency: T.nilable(String), recipient: T.nilable(String), expires: T.nilable(String), description: T.nilable(String), external_id: T.nilable(String), memo: T.nilable(String), fee_payer: T::Boolean, chain_id: T.nilable(Integer), extra: T.nilable(T::Hash[String, String]), mppx_scope: T.nilable(T::Hash[String, String]), body: T.untyped).returns(T.untyped) }
       def charge(authorization, amount, currency: nil, recipient: nil, expires: nil,
-        description: nil, external_id: nil, memo: nil, fee_payer: false, chain_id: nil, extra: nil)
+        description: nil, external_id: nil, memo: nil, fee_payer: false, chain_id: nil,
+        extra: nil, mppx_scope: nil, body: nil)
         intent = @method.intents["charge"]
         raise ArgumentError, "Method #{@method.name} does not support charge intent" unless intent
 
@@ -90,6 +91,12 @@ module Mpp
           end
           request["extra"] = extra
         end
+        if mppx_scope
+          mppx_scope.each do |k, v|
+            raise ArgumentError, "mppx_scope must be a dict[str, str]" unless k.is_a?(String) && v.is_a?(String)
+          end
+          request["_mppx_scope"] = mppx_scope
+        end
 
         resolved_chain_id = chain_id
         resolved_chain_id ||= @method.chain_id if @method.respond_to?(:chain_id)
@@ -113,7 +120,8 @@ module Mpp
           method: @method.name,
           description: description,
           expires: expires,
-          events: @events
+          events: @events,
+          body: body
         )
       end
     end

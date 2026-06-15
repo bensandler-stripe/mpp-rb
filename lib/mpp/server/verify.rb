@@ -15,9 +15,9 @@ module Mpp
       # Verify a payment credential or generate a new challenge.
       #
       # Returns Challenge (payment required) or [Credential, Receipt] (verified).
-      sig { params(authorization: T.nilable(String), intent: T.untyped, request: T::Hash[String, T.untyped], realm: String, secret_key: String, method: T.nilable(String), description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String), events: T.nilable(Mpp::Events::Dispatcher)).returns(T.untyped) }
+      sig { params(authorization: T.nilable(String), intent: T.untyped, request: T::Hash[String, T.untyped], realm: String, secret_key: String, method: T.nilable(String), description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String), events: T.nilable(Mpp::Events::Dispatcher), body: T.untyped).returns(T.untyped) }
       def verify_or_challenge(authorization:, intent:, request:, realm:, secret_key:,
-        method: nil, description: nil, meta: nil, expires: nil, events: nil)
+        method: nil, description: nil, meta: nil, expires: nil, events: nil, body: nil)
         method_name = method || "tempo"
         request = Mpp::Units.transform_units(request)
         dispatcher = events
@@ -25,7 +25,7 @@ module Mpp
         method_context = events_enabled ? {name: method_name, intent: intent.name} : nil
 
         new_challenge = Kernel.lambda { |credential = nil, error = nil, submitted_challenge = nil|
-          challenge = create_challenge(method_name, intent.name, request, realm, secret_key, description, meta, expires)
+          challenge = create_challenge(method_name, intent.name, request, realm, secret_key, description, meta, expires, body)
           if error && dispatcher&.has_handlers?(Mpp::Events::PAYMENT_FAILED)
             emit_payment_failed(
               dispatcher: dispatcher,
@@ -115,6 +115,14 @@ module Mpp
           )
         end
 
+        unless body_digest_matches?(echo, body)
+          return new_challenge.call(
+            credential,
+            Mpp::InvalidChallengeError.new(challenge_id: echo.id, reason: "body digest mismatch"),
+            echo
+          )
+        end
+
         # Verify echoed request parameters match endpoint's expected request
         request.each do |key, value|
           unless echo_request[key] == value
@@ -177,15 +185,16 @@ module Mpp
         [credential, receipt]
       end
 
-      sig { params(method: String, intent_name: String, request: T::Hash[String, T.untyped], realm: String, secret_key: String, description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String)).returns(Mpp::Challenge) }
+      sig { params(method: String, intent_name: String, request: T::Hash[String, T.untyped], realm: String, secret_key: String, description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String), body: T.untyped).returns(Mpp::Challenge) }
       def create_challenge(method, intent_name, request, realm, secret_key,
-        description = nil, meta = nil, expires = nil)
+        description = nil, meta = nil, expires = nil, body = nil)
         expires = nil if expires && !expires.is_a?(String)
 
         if expires.nil?
           expires_dt = Time.now.utc + (DEFAULT_EXPIRES_MINUTES * 60)
           expires = expires_dt.strftime("%Y-%m-%dT%H:%M:%S.%LZ")
         end
+        digest = body.nil? ? nil : Mpp::BodyDigest.compute(body)
 
         Mpp::Challenge.create(
           secret_key: secret_key,
@@ -194,9 +203,20 @@ module Mpp
           intent: intent_name,
           request: request,
           expires: expires,
+          digest: digest,
           description: description,
           meta: meta
         )
+      end
+
+      sig { params(echo: Mpp::ChallengeEcho, body: T.untyped).returns(T::Boolean) }
+      def body_digest_matches?(echo, body)
+        if body.nil?
+          return echo.digest.nil?
+        end
+        return false unless echo.digest
+
+        Mpp::BodyDigest.verify(T.must(echo.digest), body)
       end
 
       sig { params(header: String).returns(T.nilable(String)) }
