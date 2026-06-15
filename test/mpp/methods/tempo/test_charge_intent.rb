@@ -82,7 +82,8 @@ class TestTempoChargeIntent < Minitest::Test
     signature = Mpp::Methods::Tempo::Proof.sign(
       account: account,
       chain_id: chain_id,
-      challenge_id: challenge_id
+      challenge_id: challenge_id,
+      realm: REALM
     )
 
     credential = Mpp::Credential.new(

@@ -63,9 +63,10 @@ module Mpp
       end
 
       # Handle a charge intent.
-      sig { params(authorization: T.nilable(String), amount: String, currency: T.nilable(String), recipient: T.nilable(String), expires: T.nilable(String), description: T.nilable(String), memo: T.nilable(String), fee_payer: T::Boolean, chain_id: T.nilable(Integer), extra: T.nilable(T::Hash[String, String]), mppx_scope: T.nilable(T::Hash[String, String]), body: T.untyped).returns(T.untyped) }
+      sig { params(authorization: T.nilable(String), amount: String, currency: T.nilable(String), recipient: T.nilable(String), expires: T.nilable(String), description: T.nilable(String), external_id: T.nilable(String), memo: T.nilable(String), fee_payer: T::Boolean, chain_id: T.nilable(Integer), extra: T.nilable(T::Hash[String, String]), mppx_scope: T.nilable(T::Hash[String, String]), body: T.untyped).returns(T.untyped) }
       def charge(authorization, amount, currency: nil, recipient: nil, expires: nil,
-        description: nil, memo: nil, fee_payer: false, chain_id: nil, extra: nil, mppx_scope: nil, body: nil)
+        description: nil, external_id: nil, memo: nil, fee_payer: false, chain_id: nil,
+        extra: nil, mppx_scope: nil, body: nil)
         intent = @method.intents["charge"]
         raise ArgumentError, "Method #{@method.name} does not support charge intent" unless intent
 
@@ -82,6 +83,7 @@ module Mpp
           "currency" => resolved_currency,
           "recipient" => resolved_recipient
         }
+        request["externalId"] = external_id unless external_id.nil?
 
         if extra
           extra.each do |k, v|

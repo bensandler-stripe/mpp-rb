@@ -202,6 +202,15 @@ class TestParsing < Minitest::Test
     assert_instance_of Time, receipt.timestamp
   end
 
+  def test_receipt_success_factory_preserves_extra
+    receipt = Mpp::Receipt.success(
+      "0xdeadbeef",
+      extra: {"trace_id" => "trace-123"}
+    )
+
+    assert_equal({"trace_id" => "trace-123"}, receipt.extra)
+  end
+
   def test_parse_payment_receipt_rejects_invalid_method_ids
     invalid_payment_method_ids.each do |payment_method|
       payload = {

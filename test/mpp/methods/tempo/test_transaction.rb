@@ -13,6 +13,8 @@ class TestTempoTransaction < Minitest::Test
   DISALLOWED_FEE_TOKEN = "0x20c0000000000000000000000000000000000001"
   RECIPIENT = "0x742d35Cc6634c0532925a3b844bC9e7595F8fE00"
   ACCOUNT = "0x1234567890abcdef1234567890abcdef12345678"
+  REALM = "api.example.com"
+  CHALLENGE_ID = "challenge-123"
 
   def test_build_signed_transfer_requires_eth_and_rlp
     original_require = Kernel.method(:require)
@@ -139,7 +141,7 @@ class TestTempoTransaction < Minitest::Test
     intent = Mpp::Methods::Tempo::ChargeIntent.new
     Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
 
-    signed_raw = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
+    signed_raw, = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
     decoded = decode_raw_tx(signed_raw, 0x76)
 
     assert_equal CURRENCY.downcase.delete_prefix("0x"), decoded[10].unpack1("H*")
@@ -147,19 +149,161 @@ class TestTempoTransaction < Minitest::Test
     assert_equal 65, decoded[13].bytesize
   end
 
-  def test_charge_intent_cosigns_fee_payer_envelope_with_access_list
+  def test_charge_intent_rejects_fee_payer_envelope_with_access_list
     skip "eth/rlp gems not available" unless eth_and_rlp_available?
 
     payer = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
     fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
-    access_list = [[pack_hex(CURRENCY), [pack_hex("0x#{"00" * 32}")]]]
+    raw_tx = build_fee_payer_envelope(
+      payer: payer,
+      access_list: [[pack_hex(CURRENCY), [pack_hex("0x#{"00" * 32}")]]]
+    )
+    intent = Mpp::Methods::Tempo::ChargeIntent.new
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "access list is not allowed"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_above_gas_policy
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(gas_limit: 2_000_001)
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "gas limit exceeds sponsor policy"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_above_fee_policy
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(max_fee_per_gas: 100_000_000_001)
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "max fee per gas exceeds sponsor policy"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_above_priority_fee_policy
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(
+      max_priority_fee_per_gas: 50_000_000_001,
+      max_fee_per_gas: 60_000_000_000
+    )
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "max priority fee per gas exceeds sponsor policy"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_above_validity_window
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(valid_before: Time.now.to_i + (15 * 60) + 1)
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "validity window exceeds sponsor policy"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_with_extra_call
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    payment_call = Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_data)
+    raw_tx = build_fee_payer_envelope(calls: [payment_call, payment_call])
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request)
+    end
+
+    assert_includes error.message, "contains unauthorized extra calls"
+  end
+
+  def test_charge_intent_cosigns_fee_payer_envelope_with_challenge_bound_memo
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(
+      calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_with_memo_data)]
+    )
+    intent = configured_fee_payer_intent
+
+    signed_raw, = intent.send(
+      :cosign_as_fee_payer,
+      raw_tx,
+      CURRENCY,
+      request: charge_request,
+      challenge: charge_challenge
+    )
+    decoded = decode_raw_tx(signed_raw, 0x76)
+
+    assert_equal CURRENCY.downcase.delete_prefix("0x"), decoded[10].unpack1("H*")
+    assert_equal 3, decoded[11].length
+  end
+
+  def test_charge_intent_rejects_tempo_authorization_list
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    payer = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
+    fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
     tx = Mpp::Methods::Tempo::Transaction::SignedTransaction.new(
       chain_id: 42_431,
       max_priority_fee_per_gas: 1,
       max_fee_per_gas: 1,
       gas_limit: 1_000_000,
       calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_data)],
-      access_list: access_list,
+      access_list: [],
+      nonce_key: (1 << 256) - 1,
+      nonce: 0,
+      valid_before: Time.now.to_i + 60,
+      valid_after: nil,
+      fee_token: nil,
+      sender_signature: nil,
+      fee_payer_signature: Mpp::Methods::Tempo::Transaction::EMPTY_SIGNATURE,
+      sender_address: payer.address,
+      tempo_authorization_list: [[pack_hex(CURRENCY)]],
+      key_authorization: nil
+    )
+    sender_signature = payer.sign_hash(tx.signature_hash)
+    raw_tx = "0x#{Mpp::Methods::Tempo::FeePayer.encode(tx.with(sender_signature: sender_signature)).unpack1("H*")}"
+    intent = Mpp::Methods::Tempo::ChargeIntent.new
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
+    end
+    assert_includes error.message, "tempo_authorization_list"
+  end
+
+  def test_charge_intent_rejects_key_authorization
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    payer = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
+    fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
+    tx = Mpp::Methods::Tempo::Transaction::SignedTransaction.new(
+      chain_id: 42_431,
+      max_priority_fee_per_gas: 1,
+      max_fee_per_gas: 1,
+      gas_limit: 1_000_000,
+      calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_data)],
+      access_list: [],
       nonce_key: (1 << 256) - 1,
       nonce: 0,
       valid_before: Time.now.to_i + 60,
@@ -169,19 +313,89 @@ class TestTempoTransaction < Minitest::Test
       fee_payer_signature: Mpp::Methods::Tempo::Transaction::EMPTY_SIGNATURE,
       sender_address: payer.address,
       tempo_authorization_list: [],
-      key_authorization: nil
+      key_authorization: RLP.encode([pack_hex(CURRENCY)])
     )
     sender_signature = payer.sign_hash(tx.signature_hash)
     raw_tx = "0x#{Mpp::Methods::Tempo::FeePayer.encode(tx.with(sender_signature: sender_signature)).unpack1("H*")}"
     intent = Mpp::Methods::Tempo::ChargeIntent.new
     Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
 
-    signed_raw = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
-    decoded = decode_raw_tx(signed_raw, 0x76)
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
+    end
+    assert_includes error.message, "key_authorization"
+  end
 
-    assert_equal access_list, decoded[5]
-    assert_equal 3, decoded[11].length
-    assert_equal 65, decoded[13].bytesize
+  def test_charge_intent_rejects_fee_payer_envelope_with_plain_transfer
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(
+        :cosign_as_fee_payer,
+        raw_tx,
+        CURRENCY,
+        request: charge_request,
+        challenge: charge_challenge
+      )
+    end
+
+    assert_includes error.message, "no matching payment call found"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_with_wrong_challenge_memo
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    memo = Mpp::Methods::Tempo::Attribution.encode(
+      server_id: REALM,
+      challenge_id: "other-challenge"
+    )
+    raw_tx = build_fee_payer_envelope(
+      calls: [
+        Mpp::Methods::Tempo::Transaction::Call.new(
+          to: CURRENCY,
+          value: 0,
+          data: transfer_with_memo_data(memo: memo)
+        )
+      ]
+    )
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(
+        :cosign_as_fee_payer,
+        raw_tx,
+        CURRENCY,
+        request: charge_request,
+        challenge: charge_challenge
+      )
+    end
+
+    assert_includes error.message, "no matching payment call found"
+  end
+
+  def test_charge_intent_rejects_fee_payer_envelope_with_wrong_chain_id
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    raw_tx = build_fee_payer_envelope(
+      chain_id: 4217,
+      calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_with_memo_data)]
+    )
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(
+        :cosign_as_fee_payer,
+        raw_tx,
+        CURRENCY,
+        request: charge_request,
+        challenge: charge_challenge
+      )
+    end
+
+    assert_includes error.message, "chain ID does not match request"
   end
 
   def test_charge_intent_rejects_non_allowlisted_fee_token
@@ -240,12 +454,177 @@ class TestTempoTransaction < Minitest::Test
     assert_includes error.message, "not allowed by fee payer policy"
   end
 
+  # The simulate payload must target the co-signed tx: the recovered sender as
+  # `from`, the sponsor fields the node needs (feeToken, feePayerSignature), the
+  # payment calls, the expiring nonceKey, the validity window, and validation off.
+  def test_cosign_returns_simulate_payload_with_sponsor_abi
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    _intent, payload, payer = cosign_fixture
+    tx_request = payload.dig("blockStateCalls", 0, "calls", 0)
+
+    assert_equal false, payload["validation"]
+    assert_equal "0x76", tx_request["type"]
+    # `from` must be the sender recovered from the co-signed tx.
+    assert_equal payer.address.downcase, tx_request["from"].downcase
+    assert_equal CURRENCY.downcase, tx_request["feeToken"].downcase
+    assert tx_request["feePayerSignature"].is_a?(Hash), "feePayerSignature must be present"
+    assert tx_request["nonceKey"].start_with?("0x"), "nonceKey must be a hex quantity"
+    assert tx_request["validBefore"].start_with?("0x"), "validBefore must be present"
+    # Single call is carried via the top-level to/value/input shorthand (not the
+    # `calls` array) to avoid the node injecting a phantom CREATE call after it.
+    assert_nil tx_request["calls"]
+    assert_equal CURRENCY.downcase, tx_request["to"].downcase
+    assert_equal "0x0", tx_request["value"]
+    assert tx_request["input"].start_with?("0xa9059cbb"), "input must be the transfer calldata"
+  end
+
+  # A reverting simulation must block the broadcast so we never pay gas for a
+  # failing transaction.
+  def test_simulate_before_broadcast_rejects_revert
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    intent, payload = cosign_fixture
+    revert = {"blocks" => [{"calls" => [{"status" => "0x0", "error" => {"message" => "execution reverted"}}]}]}
+
+    error = Mpp::Methods::Tempo::Rpc.stub(:call, ->(_url, method, _params) {
+      assert_equal "tempo_simulateV1", method
+      revert
+    }) do
+      assert_raises(Mpp::VerificationError) do
+        intent.send(:simulate_before_broadcast, payload, "https://rpc.example.test")
+      end
+    end
+    assert_includes error.message, "would revert"
+    assert_includes error.message, "execution reverted"
+  end
+
+  # A successful simulation must let the broadcast proceed.
+  def test_simulate_before_broadcast_accepts_success
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    intent, payload = cosign_fixture
+    success = {"blocks" => [{"calls" => [{"status" => "0x1"}]}]}
+
+    Mpp::Methods::Tempo::Rpc.stub(:call, ->(_url, _method, _params) { success }) do
+      assert_nil intent.send(:simulate_before_broadcast, payload, "https://rpc.example.test")
+    end
+  end
+
+  # If the simulation RPC itself errors, fail closed.
+  def test_simulate_before_broadcast_fails_closed_on_rpc_error
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    intent, payload = cosign_fixture
+
+    error = Mpp::Methods::Tempo::Rpc.stub(:call, ->(_url, _method, _params) { raise "node unavailable" }) do
+      assert_raises(Mpp::VerificationError) do
+        intent.send(:simulate_before_broadcast, payload, "https://rpc.example.test")
+      end
+    end
+    assert_includes error.message, "Pre-broadcast simulation failed"
+  end
+
   private
+
+  # Co-sign an awaiting-fee-payer envelope; returns [intent, simulate_payload, payer].
+  def cosign_fixture
+    payer = Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}")
+    fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
+    raw_tx, = Mpp::Methods::Tempo::Transaction.build_signed_transfer(
+      account: payer,
+      chain_id: 42_431,
+      gas_limit: 1_000_000,
+      gas_price: 1,
+      nonce: 0,
+      nonce_key: (1 << 256) - 1,
+      currency: CURRENCY,
+      transfer_data: transfer_data,
+      valid_before: Time.now.to_i + 60,
+      awaiting_fee_payer: true
+    )
+    intent = Mpp::Methods::Tempo::ChargeIntent.new(rpc_url: "https://rpc.example.test")
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
+
+    _signed_raw, payload = intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY)
+    [intent, payload, payer]
+  end
+
+  def configured_fee_payer_intent
+    intent = Mpp::Methods::Tempo::ChargeIntent.new
+    fee_payer = Mpp::Methods::Tempo::Account.from_key("0x#{"22" * 32}")
+    Mpp::Methods::Tempo.tempo(intents: {"charge" => intent}, fee_payer: fee_payer)
+    intent
+  end
+
+  def charge_request
+    Mpp::Methods::Tempo::Schemas::ChargeRequest.from_hash(
+      "amount" => "1000000",
+      "currency" => CURRENCY,
+      "recipient" => RECIPIENT,
+      "methodDetails" => {"feePayer" => true, "chainId" => 42_431}
+    )
+  end
+
+  def charge_challenge
+    Mpp::ChallengeEcho.new(
+      id: CHALLENGE_ID,
+      realm: REALM,
+      method: "tempo",
+      intent: "charge",
+      request: ""
+    )
+  end
+
+  def build_fee_payer_envelope(
+    payer: Mpp::Methods::Tempo::Account.from_key("0x#{"11" * 32}"),
+    chain_id: 42_431,
+    max_priority_fee_per_gas: 1,
+    max_fee_per_gas: 1,
+    gas_limit: 1_000_000,
+    calls: [Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: transfer_data)],
+    access_list: [],
+    nonce_key: (1 << 256) - 1,
+    valid_before: Time.now.to_i + 60,
+    fee_token: nil
+  )
+    tx = Mpp::Methods::Tempo::Transaction::SignedTransaction.new(
+      chain_id: chain_id,
+      max_priority_fee_per_gas: max_priority_fee_per_gas,
+      max_fee_per_gas: max_fee_per_gas,
+      gas_limit: gas_limit,
+      calls: calls,
+      access_list: access_list,
+      nonce_key: nonce_key,
+      nonce: 0,
+      valid_before: valid_before,
+      valid_after: nil,
+      fee_token: fee_token,
+      sender_signature: nil,
+      fee_payer_signature: Mpp::Methods::Tempo::Transaction::EMPTY_SIGNATURE,
+      sender_address: payer.address,
+      tempo_authorization_list: [],
+      key_authorization: nil
+    )
+    sender_signature = payer.sign_hash(tx.signature_hash)
+    "0x#{Mpp::Methods::Tempo::FeePayer.encode(tx.with(sender_signature: sender_signature)).unpack1("H*")}"
+  end
 
   def transfer_data
     to_padded = RECIPIENT.delete_prefix("0x").downcase.rjust(64, "0")
     amount_padded = 1_000_000.to_s(16).rjust(64, "0")
     "0xa9059cbb#{to_padded}#{amount_padded}"
+  end
+
+  def transfer_with_memo_data(memo: nil)
+    memo ||= Mpp::Methods::Tempo::Attribution.encode(
+      server_id: REALM,
+      challenge_id: CHALLENGE_ID
+    )
+    to_padded = RECIPIENT.delete_prefix("0x").downcase.rjust(64, "0")
+    amount_padded = 1_000_000.to_s(16).rjust(64, "0")
+    memo_clean = memo.delete_prefix("0x").downcase
+    "0x95777d59#{to_padded}#{amount_padded}#{memo_clean}"
   end
 
   def decode_raw_tx(raw_tx, prefix)
