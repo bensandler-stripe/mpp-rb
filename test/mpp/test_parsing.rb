@@ -298,6 +298,16 @@ class TestParsing < Minitest::Test
     assert_equal challenge.id, result[0].id
   end
 
+  def test_from_www_authenticate_list_allows_whitespace_around_param_equals
+    header = 'Payment id="ch", realm = "api", method="tempo", intent="charge", request="e30"'
+    result = Mpp::Challenge.from_www_authenticate_list(header)
+
+    # OWS around "=" (key\s*=\s*value) must not be mistaken for a new scheme
+    # after a comma, so the challenge stays whole instead of truncating at realm.
+    assert_equal 1, result.length
+    assert_equal "tempo", result[0].method
+  end
+
   def test_from_www_authenticate_list_empty
     assert_equal [], Mpp::Challenge.from_www_authenticate_list("Bearer token123")
     assert_equal [], Mpp::Challenge.from_www_authenticate_list("")

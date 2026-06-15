@@ -118,7 +118,9 @@ module Mpp
 
         if scheme_boundary?(header, i)
           match = T.must(header[i..]).match(/\A([A-Za-z][A-Za-z0-9._~+\/-]*)\s+/)
-          if match
+          # An auth-param permits OWS around "=" (key\s*=\s*value), so a token
+          # followed by whitespace then "=" is a parameter, not a new scheme.
+          if match && header[i + T.must(match[0]).length] != "="
             yield i, T.must(match[1])
             i += T.must(match[0]).length
             next
