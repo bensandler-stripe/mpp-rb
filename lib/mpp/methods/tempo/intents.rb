@@ -131,7 +131,7 @@ module Mpp
         end
 
         def verify_transaction(payload, request, credential:)
-          validate_transaction_payload(payload.signature, request)
+          validate_transaction_payload(payload.signature, request, challenge: credential.challenge)
 
           raw_tx = payload.signature
 
@@ -140,7 +140,7 @@ module Mpp
 
           if request.method_details.fee_payer
             if fee_payer
-              raw_tx, simulate_payload = cosign_as_fee_payer(raw_tx, request.currency, request: request)
+              raw_tx, simulate_payload = cosign_as_fee_payer(raw_tx, request.currency, request: request, challenge: credential.challenge)
             else
               fee_payer_url = request.method_details.fee_payer_url || Defaults::DEFAULT_FEE_PAYER_URL
               result = Rpc.call(fee_payer_url, "eth_signRawTransaction", [raw_tx])
@@ -265,7 +265,7 @@ module Mpp
           raise Mpp::VerificationError, "Payment verification failed: memo is not bound to this challenge"
         end
 
-        def validate_transaction_payload(signature, request)
+        def validate_transaction_payload(signature, request, challenge: nil)
           # Best-effort pre-broadcast check
           begin
             require "rlp"
@@ -289,6 +289,11 @@ module Mpp
 
           return unless decoded.is_a?(Array) && decoded.length >= 5
 
+          chain_id = int_value(decoded[0])
+          unless chain_id == Integer(request.method_details.chain_id)
+            raise Mpp::VerificationError, "Invalid transaction: chain ID does not match request"
+          end
+
           calls_data = decoded[4] || []
           raise Mpp::VerificationError, "Transaction contains no calls" if calls_data.empty?
 
@@ -303,13 +308,13 @@ module Mpp
             next unless "0x#{to_hex}".downcase == request.currency.downcase
 
             data_hex = call_data_bytes.is_a?(String) ? call_data_bytes.unpack1("H*") : call_data_bytes.to_s
-            match_transfer_calldata(data_hex, request)
+            match_transfer_calldata(data_hex, request, challenge: challenge)
           end
 
           raise Mpp::VerificationError, "Invalid transaction: no matching payment call found" unless found
         end
 
-        def match_transfer_calldata(call_data_hex, request)
+        def match_transfer_calldata(call_data_hex, request, challenge: nil)
           return false if call_data_hex.length < 136
 
           selector = call_data_hex[0, 8].downcase
@@ -317,7 +322,7 @@ module Mpp
 
           if expected_memo
             return false unless selector == TRANSFER_WITH_MEMO_SELECTOR
-          elsif ![TRANSFER_SELECTOR, TRANSFER_WITH_MEMO_SELECTOR].include?(selector)
+          elsif selector != TRANSFER_WITH_MEMO_SELECTOR
             return false
           end
 
@@ -326,14 +331,19 @@ module Mpp
 
           return false unless decoded_to.downcase == request.recipient.downcase
           return false unless decoded_amount == Integer(request.amount)
+          return false if call_data_hex.length < 200
 
           if expected_memo
-            return false if call_data_hex.length < 200
-
             decoded_memo = "0x#{call_data_hex[136, 64]}"
             memo_clean = expected_memo.downcase
             memo_clean = "0x#{memo_clean}" unless memo_clean.start_with?("0x")
             return false unless decoded_memo.downcase == memo_clean
+          else
+            return false unless challenge
+
+            decoded_memo = "0x#{call_data_hex[136, 64]}"
+            return false unless Attribution.verify_server(decoded_memo, challenge.realm)
+            return false unless Attribution.verify_challenge_binding(decoded_memo, challenge.id)
           end
 
           true
@@ -352,6 +362,7 @@ module Mpp
             address: source[:address],
             chain_id: resolved_chain_id,
             challenge_id: credential.challenge.id,
+            realm: credential.challenge.realm,
             signature: payload.signature
           )
           raise Mpp::VerificationError, "Proof signature does not match source" unless valid
@@ -364,7 +375,7 @@ module Mpp
           Mpp::Receipt.success(credential.challenge.id)
         end
 
-        def cosign_as_fee_payer(raw_tx, fee_token, request: nil)
+        def cosign_as_fee_payer(raw_tx, fee_token, request: nil, challenge: nil)
           require "eth"
           require "rlp"
 
@@ -377,16 +388,6 @@ module Mpp
           rescue => e
             raise Mpp::VerificationError, "Failed to deserialize client transaction: #{e.message}"
           end
-
-          int = ->(b) {
-            if b.is_a?(String) && !b.empty?
-              b.unpack1("H*").to_i(16)
-            elsif b.is_a?(Integer)
-              b
-            else
-              0
-            end
-          }
 
           # Validate fee-payer invariants
           fee_token_field = decoded[10]
@@ -406,7 +407,7 @@ module Mpp
               "Fee payer envelope must not include key_authorization (cannot be safely pre-simulated)"
           end
 
-          nonce_key = int.call(decoded[6])
+          nonce_key = int_value(decoded[6])
           unless nonce_key == (1 << 256) - 1
             raise Mpp::VerificationError, "Fee payer envelope must use expiring nonce key (U256::MAX)"
           end
@@ -415,10 +416,44 @@ module Mpp
           if !valid_before_raw.is_a?(String) || valid_before_raw.empty?
             raise Mpp::VerificationError, "Fee payer envelope must include valid_before"
           end
-          valid_before = int.call(valid_before_raw)
+          valid_before = int_value(valid_before_raw)
           if valid_before <= Time.now.to_i
             raise Mpp::VerificationError,
               "Fee payer envelope expired: valid_before (#{valid_before}) is not in the future"
+          end
+
+          chain_id = int_value(decoded[0])
+          if request && chain_id != Integer(request.method_details.chain_id)
+            raise Mpp::VerificationError, "Invalid transaction: chain ID does not match request"
+          end
+          max_priority_fee_per_gas = int_value(decoded[1])
+          max_fee_per_gas = int_value(decoded[2])
+          gas_limit = int_value(decoded[3])
+          access_list = decoded[5] || Transaction::EMPTY_LIST
+          policy = FeePayerPolicy.for_chain_id(chain_id)
+
+          if gas_limit > policy.max_gas
+            raise Mpp::VerificationError, "Invalid transaction: gas limit exceeds sponsor policy"
+          end
+          if max_fee_per_gas > policy.max_fee_per_gas
+            raise Mpp::VerificationError, "Invalid transaction: max fee per gas exceeds sponsor policy"
+          end
+          if max_priority_fee_per_gas > max_fee_per_gas
+            raise Mpp::VerificationError,
+              "Invalid transaction: max priority fee per gas exceeds max fee per gas"
+          end
+          if max_priority_fee_per_gas > policy.max_priority_fee_per_gas
+            raise Mpp::VerificationError,
+              "Invalid transaction: max priority fee per gas exceeds sponsor policy"
+          end
+          if gas_limit * max_fee_per_gas > policy.max_total_fee
+            raise Mpp::VerificationError, "Invalid transaction: total fee budget exceeds sponsor policy"
+          end
+          if valid_before > Time.now.to_i + policy.max_validity_window_seconds
+            raise Mpp::VerificationError, "Invalid transaction: validity window exceeds sponsor policy"
+          end
+          unless access_list.empty?
+            raise Mpp::VerificationError, "Invalid transaction: access list is not allowed"
           end
 
           # Build calls from decoded RLP
@@ -426,23 +461,25 @@ module Mpp
           calls = calls_data.map do |c|
             Transaction::Call.new(
               to: "0x#{c[0].unpack1("H*")}",
-              value: int.call(c[1]),
+              value: int_value(c[1]),
               data: "0x#{c[2].unpack1("H*")}"
             )
           end
 
+          validate_fee_payer_calls(calls, request, challenge: challenge) if request
+
           # Reconstruct transaction for sender signature recovery
           tx_for_recovery = Transaction::SignedTransaction.new(
-            chain_id: int.call(decoded[0]),
-            max_priority_fee_per_gas: int.call(decoded[1]),
-            max_fee_per_gas: int.call(decoded[2]),
-            gas_limit: int.call(decoded[3]),
+            chain_id: chain_id,
+            max_priority_fee_per_gas: max_priority_fee_per_gas,
+            max_fee_per_gas: max_fee_per_gas,
+            gas_limit: gas_limit,
             calls: calls,
-            access_list: decoded[5] || Transaction::EMPTY_LIST,
-            nonce_key: int.call(decoded[6]),
-            nonce: int.call(decoded[7]),
-            valid_before: int.call(decoded[8]),
-            valid_after: (decoded[9].is_a?(String) && !decoded[9].empty?) ? int.call(decoded[9]) : nil,
+            access_list: Transaction::EMPTY_LIST,
+            nonce_key: int_value(decoded[6]),
+            nonce: int_value(decoded[7]),
+            valid_before: int_value(decoded[8]),
+            valid_after: (decoded[9].is_a?(String) && !decoded[9].empty?) ? int_value(decoded[9]) : nil,
             fee_token: nil,
             sender_signature: sender_sig,
             fee_payer_signature: Transaction::EMPTY_SIGNATURE,
@@ -466,7 +503,7 @@ module Mpp
           raise Mpp::VerificationError, "No fee token available" unless resolved_fee_token
 
           allowed_fee_tokens = fee_payer_allowed_fee_tokens ||
-            [Defaults.default_currency_for_chain(int.call(decoded[0])).downcase]
+            [Defaults.default_currency_for_chain(chain_id).downcase]
           unless allowed_fee_tokens.map(&:downcase).include?(resolved_fee_token.downcase)
             raise Mpp::VerificationError,
               "Fee token #{resolved_fee_token} is not allowed by fee payer policy"
@@ -581,6 +618,33 @@ module Mpp
             "s" => "0x#{bytes[32, 32].unpack1("H*")}",
             "yParity" => to_hex(parity)
           }
+        end
+
+        def validate_fee_payer_calls(calls, request, challenge: nil)
+          if calls.length != 1
+            raise Mpp::VerificationError, "Invalid transaction: contains unauthorized extra calls"
+          end
+
+          call = calls.first
+          if call.value && Integer(call.value) != 0
+            raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
+          end
+          unless call.to.downcase == request.currency.downcase
+            raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
+          end
+          unless match_transfer_calldata(call.data.delete_prefix("0x"), request, challenge: challenge)
+            raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
+          end
+        end
+
+        def int_value(value)
+          if value.is_a?(String) && !value.empty?
+            value.unpack1("H*").to_i(16)
+          elsif value.is_a?(Integer)
+            value
+          else
+            0
+          end
         end
       end
     end
