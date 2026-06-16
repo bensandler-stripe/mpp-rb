@@ -2,7 +2,7 @@
 
 Ruby SDK for the [**Machine Payments Protocol**](https://mpp.dev)
 
-[![Gem Version](https://img.shields.io/gem/v/mpp.svg)](https://rubygems.org/gems/mpp-rb)
+[![Gem Version](https://img.shields.io/gem/v/mpp-rb.svg)](https://rubygems.org/gems/mpp-rb)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Documentation
