@@ -152,11 +152,13 @@ Built on the ["Payment" HTTP Authentication Scheme](https://datatracker.ietf.org
 
 ## Releasing
 
-1. Update the version in `lib/mpp/version.rb`
-2. Run `bundle lock --update mpp-rb` in the root and each `examples/` subdirectory
-3. Commit: `git commit -am "v0.x.x"`
-4. Tag: `git tag v0.x.x`
-5. Push: `git push origin main --tags`
+1. Create a release PR:
+   - Update the version in `lib/mpp/version.rb`
+   - Run `bundle lock --update mpp-rb` in the root and each `examples/` subdirectory
+   - Commit and open a PR to verify CI passes
+2. Merge the PR
+3. Tag the merge commit: `git tag v0.x.x`
+4. Push the tag: `git push origin --tags`
 
 ## License
 
