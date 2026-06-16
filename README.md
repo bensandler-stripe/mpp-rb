@@ -153,9 +153,10 @@ Built on the ["Payment" HTTP Authentication Scheme](https://datatracker.ietf.org
 ## Releasing
 
 1. Update the version in `lib/mpp/version.rb`
-2. Commit: `git commit -am "v0.x.x"`
-3. Tag: `git tag v0.x.x`
-4. Push: `git push origin main --tags`
+2. Run `bundle lock --update mpp-rb` in the root and each `examples/` subdirectory
+3. Commit: `git commit -am "v0.x.x"`
+4. Tag: `git tag v0.x.x`
+5. Push: `git push origin main --tags`
 
 ## License
 
