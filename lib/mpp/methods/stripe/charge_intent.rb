@@ -11,10 +11,11 @@ module Mpp
       class ChargeIntent
         attr_reader :name
 
-        def initialize(secret_key:, api_base: Defaults::STRIPE_API_BASE)
+        def initialize(secret_key:, api_base: Defaults::STRIPE_API_BASE, client: nil)
           @name = "charge"
           @secret_key = secret_key
           @api_base = api_base
+          @client = client
         end
 
         def verify(credential, request)
@@ -31,7 +32,14 @@ module Mpp
           end
 
           spt = payload_data["spt"]
-          external_id = payload_data["externalId"]
+          credential_external_id = payload_data["externalId"]
+          request_external_id = request["externalId"]
+          if !request_external_id.nil? && credential_external_id != request_external_id
+            raise Mpp::InvalidChallengeError.new(
+              challenge_id: credential.challenge.id,
+              reason: "credential externalId does not match request externalId"
+            )
+          end
 
           method_details = request["methodDetails"]
           method_details = {} unless method_details.is_a?(Hash)
@@ -58,15 +66,16 @@ module Mpp
             params[:metadata] = method_details["metadata"].transform_values(&:to_s)
           end
 
-          # Create PaymentIntent via Stripe SDK
-          begin
-            Kernel.require "stripe"
-          rescue LoadError
-            raise "stripe gem is required for Stripe charge verification. Install with: gem install stripe"
+          unless @client
+            begin
+              Kernel.require "stripe"
+            rescue LoadError
+              raise "stripe gem is required for Stripe charge verification. Install with: gem install stripe"
+            end
           end
 
           begin
-            client = ::Stripe::StripeClient.new(@secret_key)
+            client = @client || ::Stripe::StripeClient.new(@secret_key)
             result = client.v1.payment_intents.create(
               params,
               {idempotency_key: stripe_idempotency_key(credential)}
@@ -92,7 +101,7 @@ module Mpp
             raise Mpp::VerificationError, "PaymentIntent #{pi_id} has status: #{status}"
           end
 
-          Mpp::Receipt.success(pi_id, method: "stripe", external_id: external_id)
+          Mpp::Receipt.success(pi_id, method: "stripe", external_id: request_external_id)
         end
 
         private

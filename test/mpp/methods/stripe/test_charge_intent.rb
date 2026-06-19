@@ -3,20 +3,69 @@
 
 require "test_helper"
 require "json"
+require "tmpdir"
 
 class TestStripeChargeIntent < Minitest::Test
+  FakePaymentIntents = Struct.new(:result, :error, :assertion, :calls, keyword_init: true) do
+    def initialize(result: nil, error: nil, assertion: nil)
+      super(result: result, error: error, assertion: assertion, calls: [])
+    end
+
+    def create(params, opts)
+      calls << [params, opts]
+      assertion&.call(params, opts)
+      raise error if error
+
+      result
+    end
+  end
+
   def setup
     @intent = Mpp::Methods::Stripe::ChargeIntent.new(
       secret_key: "sk_test_fake",
       api_base: "https://api.stripe.com"
     )
+  end
 
-    @stripe_available = begin
-      require "stripe"
-      true
-    rescue LoadError
-      false
+  def intent_with_payment_intents(payment_intents)
+    client = Struct.new(:v1).new(Struct.new(:payment_intents).new(payment_intents))
+    Mpp::Methods::Stripe::ChargeIntent.new(secret_key: "sk_test_fake", client: client)
+  end
+
+  def with_fake_stripe_client(payment_intents)
+    created_secret_keys = []
+    previous_stripe = nil
+    previous_stripe = Object.const_get(:Stripe) if Object.const_defined?(:Stripe, false)
+    Object.send(:remove_const, :Stripe) if Object.const_defined?(:Stripe, false)
+
+    fake_client = Class.new do
+      define_method(:initialize) do |secret_key|
+        created_secret_keys << secret_key
+      end
+
+      define_method(:v1) do
+        Struct.new(:payment_intents).new(payment_intents)
+      end
     end
+
+    fake_stripe = Module.new
+    fake_stripe.const_set(:StripeClient, fake_client)
+    Object.const_set(:Stripe, fake_stripe)
+
+    Dir.mktmpdir do |dir|
+      fake_stripe_path = File.join(dir, "stripe.rb")
+      File.write(fake_stripe_path, "# fake stripe for tests\n")
+      $LOAD_PATH.unshift(dir)
+      begin
+        yield created_secret_keys
+      ensure
+        $LOAD_PATH.delete(dir)
+        $LOADED_FEATURES.delete(fake_stripe_path)
+      end
+    end
+  ensure
+    Object.send(:remove_const, :Stripe) if Object.const_defined?(:Stripe, false)
+    Object.const_set(:Stripe, previous_stripe) if previous_stripe
   end
 
   def make_credential(payload:, expires: nil)
@@ -34,12 +83,13 @@ class TestStripeChargeIntent < Minitest::Test
     Mpp::Credential.new(challenge: echo, payload: payload)
   end
 
-  def make_request(amount: "100", currency: "usd", payment_method_types: ["card"], method_details: nil)
+  def make_request(amount: "100", currency: "usd", payment_method_types: ["card"], method_details: nil, external_id: nil)
     req = {
       "amount" => amount,
       "currency" => currency,
       "recipient" => "acct_test123"
     }
+    req["externalId"] = external_id if external_id
     details = {}
     details["paymentMethodTypes"] = payment_method_types unless payment_method_types.nil?
     details.merge!(method_details) if method_details
@@ -71,14 +121,15 @@ class TestStripeChargeIntent < Minitest::Test
   end
 
   def test_verify_calls_stripe_sdk
-    skip "stripe gem not available" unless @stripe_available
-
     credential = make_credential(payload: {"spt" => "spt_test123", "externalId" => "ext_1"})
-    request = make_request(payment_method_types: ["card", "link"], method_details: {"metadata" => {"order" => "123"}})
+    request = make_request(
+      payment_method_types: ["card", "link"],
+      method_details: {"metadata" => {"order" => "123"}},
+      external_id: "ext_1"
+    )
 
     mock_result = Struct.new(:id, :status).new("pi_abc123", "succeeded")
-    mock_pi = Minitest::Mock.new
-    mock_pi.expect(:create, mock_result) do |params, opts|
+    payment_intents = FakePaymentIntents.new(result: mock_result, assertion: ->(params, opts) do
       assert_equal 100, params[:amount]
       assert_equal "usd", params[:currency]
       assert_equal "spt_test123", params[:shared_payment_granted_token]
@@ -87,21 +138,56 @@ class TestStripeChargeIntent < Minitest::Test
       refute params.key?(:automatic_payment_methods)
       assert_equal({"order" => "123"}, params[:metadata])
       assert_equal "mpp-stripe-charge-test-id", opts[:idempotency_key]
-      true
-    end
+    end)
 
-    mock_v1 = Struct.new(:payment_intents).new(mock_pi)
-    mock_client = Struct.new(:v1).new(mock_v1)
+    receipt = intent_with_payment_intents(payment_intents).verify(credential, request)
+    assert_equal "success", receipt.status
+    assert_equal "pi_abc123", receipt.reference
+    assert_equal "stripe", receipt.method
+    assert_equal "ext_1", receipt.external_id
+    assert_equal 1, payment_intents.calls.length
+  end
 
-    ::Stripe::StripeClient.stub(:new, mock_client) do
+  def test_verify_constructs_stripe_client_when_not_injected
+    credential = make_credential(payload: {"spt" => "spt_test123", "externalId" => "ext_1"})
+    request = make_request(
+      payment_method_types: ["card"],
+      external_id: "ext_1"
+    )
+
+    mock_result = Struct.new(:id, :status).new("pi_abc123", "succeeded")
+    payment_intents = FakePaymentIntents.new(result: mock_result)
+
+    with_fake_stripe_client(payment_intents) do |created_secret_keys|
       receipt = @intent.verify(credential, request)
-      assert_equal "success", receipt.status
-      assert_equal "pi_abc123", receipt.reference
-      assert_equal "stripe", receipt.method
-      assert_equal "ext_1", receipt.external_id
-    end
 
-    mock_pi.verify
+      assert_equal ["sk_test_fake"], created_secret_keys
+      assert_equal "pi_abc123", receipt.reference
+      assert_equal "ext_1", receipt.external_id
+      assert_equal 1, payment_intents.calls.length
+    end
+  end
+
+  def test_verify_rejects_forged_external_id
+    credential = make_credential(payload: {"spt" => "spt_test123", "externalId" => "attacker-order-999"})
+    request = make_request(external_id: "server-order-123")
+
+    err = assert_raises(Mpp::InvalidChallengeError) do
+      @intent.verify(credential, request)
+    end
+    assert_match(/externalId/, err.message)
+  end
+
+  def test_verify_ignores_payload_only_external_id
+    credential = make_credential(payload: {"spt" => "spt_test123", "externalId" => "attacker-order-999"})
+    request = make_request
+
+    mock_result = Struct.new(:id, :status).new("pi_abc123", "succeeded")
+    payment_intents = FakePaymentIntents.new(result: mock_result)
+
+    receipt = intent_with_payment_intents(payment_intents).verify(credential, request)
+    assert_nil receipt.external_id
+    assert_equal 1, payment_intents.calls.length
   end
 
   def test_verify_rejects_missing_payment_method_types
@@ -125,67 +211,42 @@ class TestStripeChargeIntent < Minitest::Test
   end
 
   def test_verify_rejects_failed_payment
-    skip "stripe gem not available" unless @stripe_available
-
     credential = make_credential(payload: {"spt" => "spt_test123"})
     request = make_request
 
-    error = ::Stripe::StripeError.new("Card declined")
+    error = StandardError.new("Card declined")
+    payment_intents = FakePaymentIntents.new(error: error)
 
-    mock_pi = Minitest::Mock.new
-    mock_pi.expect(:create, nil) { raise error }
-
-    mock_v1 = Struct.new(:payment_intents).new(mock_pi)
-    mock_client = Struct.new(:v1).new(mock_v1)
-
-    ::Stripe::StripeClient.stub(:new, mock_client) do
-      err = assert_raises(Mpp::VerificationError) do
-        @intent.verify(credential, request)
-      end
-      assert_match(/Card declined/, err.message)
+    err = assert_raises(Mpp::VerificationError) do
+      intent_with_payment_intents(payment_intents).verify(credential, request)
     end
+    assert_match(/Card declined/, err.message)
   end
 
   def test_verify_rejects_replayed_payment
-    skip "stripe gem not available" unless @stripe_available
-
     credential = make_credential(payload: {"spt" => "spt_test123"})
     request = make_request
 
     mock_headers = {"idempotent-replayed" => "true"}
     mock_last_response = Struct.new(:headers).new(mock_headers)
     mock_result = Struct.new(:id, :status, :last_response).new("pi_abc123", "succeeded", mock_last_response)
-    mock_pi = Minitest::Mock.new
-    mock_pi.expect(:create, mock_result, [Hash, {idempotency_key: "mpp-stripe-charge-test-id"}])
+    payment_intents = FakePaymentIntents.new(result: mock_result)
 
-    mock_v1 = Struct.new(:payment_intents).new(mock_pi)
-    mock_client = Struct.new(:v1).new(mock_v1)
-
-    ::Stripe::StripeClient.stub(:new, mock_client) do
-      err = assert_raises(Mpp::VerificationError) do
-        @intent.verify(credential, request)
-      end
-      assert_equal "Payment has already been processed.", err.message
+    err = assert_raises(Mpp::VerificationError) do
+      intent_with_payment_intents(payment_intents).verify(credential, request)
     end
+    assert_equal "Payment has already been processed.", err.message
   end
 
   def test_verify_rejects_requires_action
-    skip "stripe gem not available" unless @stripe_available
-
     credential = make_credential(payload: {"spt" => "spt_test123"})
     request = make_request
 
     mock_result = Struct.new(:id, :status).new("pi_needs3ds", "requires_action")
-    mock_pi = Minitest::Mock.new
-    mock_pi.expect(:create, mock_result, [Hash, {idempotency_key: "mpp-stripe-charge-test-id"}])
+    payment_intents = FakePaymentIntents.new(result: mock_result)
 
-    mock_v1 = Struct.new(:payment_intents).new(mock_pi)
-    mock_client = Struct.new(:v1).new(mock_v1)
-
-    ::Stripe::StripeClient.stub(:new, mock_client) do
-      assert_raises(Mpp::PaymentActionRequiredError) do
-        @intent.verify(credential, request)
-      end
+    assert_raises(Mpp::PaymentActionRequiredError) do
+      intent_with_payment_intents(payment_intents).verify(credential, request)
     end
   end
 end

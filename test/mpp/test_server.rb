@@ -140,6 +140,88 @@ class TestServerVerify < Minitest::Test
     assert_equal [[challenge.id, "success", {name: "tempo", intent: "charge"}]], seen
   end
 
+  def test_successful_verification_with_body_digest
+    request = {"amount" => "1000000"}
+    body = "{\"query\":\"paid\"}"
+    challenge = Mpp::Challenge.create(
+      secret_key: SECRET,
+      realm: REALM,
+      method: "tempo",
+      intent: "charge",
+      request: request,
+      expires: Mpp::Expires.minutes(5),
+      digest: Mpp::BodyDigest.compute(body)
+    )
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "transaction", "signature" => "0xabc"},
+      source: "did:pkh:eip155:4217:0x1234"
+    )
+
+    result = Mpp::Server::Verify.verify_or_challenge(
+      authorization: credential.to_authorization,
+      intent: @intent,
+      request: request,
+      realm: REALM,
+      secret_key: SECRET,
+      body: body
+    )
+
+    assert_instance_of Array, result
+    _credential, receipt = result
+    assert_equal "success", receipt.status
+  end
+
+  def test_rejects_mismatched_body_digest
+    request = {"amount" => "1000000"}
+    challenge = Mpp::Challenge.create(
+      secret_key: SECRET,
+      realm: REALM,
+      method: "tempo",
+      intent: "charge",
+      request: request,
+      expires: Mpp::Expires.minutes(5),
+      digest: Mpp::BodyDigest.compute("{\"query\":\"paid\"}")
+    )
+    credential = Mpp::Credential.new(challenge: challenge.to_echo, payload: {"type" => "hash", "hash" => "0x123"})
+
+    result = Mpp::Server::Verify.verify_or_challenge(
+      authorization: credential.to_authorization,
+      intent: @intent,
+      request: request,
+      realm: REALM,
+      secret_key: SECRET,
+      body: "{\"query\":\"tampered\"}"
+    )
+
+    assert_instance_of Mpp::Challenge, result
+  end
+
+  def test_rejects_digest_bound_credential_without_body
+    request = {"amount" => "1000000"}
+    challenge = Mpp::Challenge.create(
+      secret_key: SECRET,
+      realm: REALM,
+      method: "tempo",
+      intent: "charge",
+      request: request,
+      expires: Mpp::Expires.minutes(5),
+      digest: Mpp::BodyDigest.compute("{\"query\":\"paid\"}")
+    )
+    credential = Mpp::Credential.new(challenge: challenge.to_echo, payload: {"type" => "hash", "hash" => "0x123"})
+
+    result = Mpp::Server::Verify.verify_or_challenge(
+      authorization: credential.to_authorization,
+      intent: @intent,
+      request: request,
+      realm: REALM,
+      secret_key: SECRET
+    )
+
+    assert_instance_of Mpp::Challenge, result
+    assert_nil result.digest
+  end
+
   def test_rejects_wrong_secret
     request = {"amount" => "1000000"}
     challenge = Mpp::Challenge.create(
@@ -321,6 +403,25 @@ class TestMppHandler < Minitest::Test
     assert_instance_of Mpp::Challenge, result
     assert result.request.dig("methodDetails", "feePayer")
     assert_equal 42_431, result.request.dig("methodDetails", "chainId")
+  end
+
+  def test_charge_binds_external_id
+    intent = MockIntent.new
+    method = MockMethod.new(
+      intents: {"charge" => intent},
+      currency: "0x20c0000000000000000000000000000000000000",
+      recipient: "0x742d35Cc6634c0532925a3b844bC9e7595F8fE00"
+    )
+    handler = Mpp::Server::MppHandler.new(
+      method: method,
+      realm: "api.example.com",
+      secret_key: "test-secret"
+    )
+
+    result = handler.charge(nil, "1.00", external_id: "order-123")
+
+    assert_instance_of Mpp::Challenge, result
+    assert_equal "order-123", result.request["externalId"]
   end
 
   def test_charge_raises_without_intent

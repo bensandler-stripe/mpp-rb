@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "test_helper"
+require "stringio"
 
 class TestMiddleware < Minitest::Test
   def setup
@@ -17,6 +18,18 @@ class TestMiddleware < Minitest::Test
     assert_equal 200, status
     assert_equal ["OK"], body
     assert_equal "text/plain", headers["Content-Type"]
+  end
+
+  def test_does_not_read_request_body_when_no_charge
+    input = CountingInput.new("x" * 1024)
+    app = ->(_env) { [200, {}, ["OK"]] }
+    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler)
+
+    status, _headers, body = middleware.call(minimal_env.merge("rack.input" => input))
+
+    assert_equal 200, status
+    assert_equal ["OK"], body
+    assert_equal 0, input.reads
   end
 
   def test_returns_402_when_charge_requested_without_auth
@@ -38,7 +51,7 @@ class TestMiddleware < Minitest::Test
   def test_attaches_receipt_on_successful_payment
     # Build a valid credential from a challenge
     handler = mock_handler
-    challenge = handler.charge(nil, "1.00")
+    challenge = handler.charge(nil, "1.00", mppx_scope: {"resource" => "/resource"})
     assert_instance_of Mpp::Challenge, challenge
 
     # Build a valid credential
@@ -63,6 +76,155 @@ class TestMiddleware < Minitest::Test
     assert_equal "no-store", headers["Cache-Control"]
     assert_vary_authorization headers
     assert_equal ["OK"], body
+  end
+
+  def test_rejects_paid_retry_with_different_auto_route_scope
+    handler = mock_handler
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      [200, {}, ["OK"]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge(
+        "PATH_INFO" => "/paid/one",
+        "QUERY_STRING" => "view=full",
+        "action_dispatch.route_uri_pattern" => "/paid/:id"
+      )
+    )
+    assert_equal 402, status
+
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    assert_equal(
+      {"route" => "/paid/:id", "resource" => "/paid/one", "query" => "view=full"},
+      challenge.request["_mppx_scope"]
+    )
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge(
+        "HTTP_AUTHORIZATION" => credential.to_authorization,
+        "PATH_INFO" => "/paid/two",
+        "QUERY_STRING" => "view=full",
+        "action_dispatch.route_uri_pattern" => "/paid/:id"
+      )
+    )
+
+    assert_equal 402, status
+    refute headers.key?("Payment-Receipt")
+  end
+
+  def test_normalizes_method_prefixed_sinatra_route_scope
+    handler = mock_handler
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      [200, {}, ["OK"]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge(
+        "PATH_INFO" => "/paid/one",
+        "QUERY_STRING" => "view=full",
+        "sinatra.route" => "GET /paid/:id"
+      )
+    )
+
+    assert_equal 402, status
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    assert_equal(
+      {"route" => "/paid/:id", "resource" => "/paid/one", "query" => "view=full"},
+      challenge.request["_mppx_scope"]
+    )
+  end
+
+  def test_rejects_paid_retry_with_tampered_body_digest
+    handler = mock_handler
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      env["rack.input"].read
+      [200, {}, ["OK"]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge("rack.input" => StringIO.new("{\"query\":\"paid\"}"))
+    )
+    assert_equal 402, status
+
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    assert_equal Mpp::BodyDigest.compute("{\"query\":\"paid\"}"), challenge.digest
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge(
+        "HTTP_AUTHORIZATION" => credential.to_authorization,
+        "rack.input" => StringIO.new("{\"query\":\"tampered\"}")
+      )
+    )
+
+    assert_equal 402, status
+    refute headers.key?("Payment-Receipt")
+    replacement = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    assert_equal Mpp::BodyDigest.compute("{\"query\":\"tampered\"}"), replacement.digest
+  end
+
+  def test_accepts_paid_retry_with_matching_body_digest
+    handler = mock_handler
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      [200, {}, [env["rack.input"].read]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+
+    body = "{\"query\":\"paid\"}"
+    status, headers, _response_body = middleware.call(
+      minimal_env.merge("rack.input" => StringIO.new(body))
+    )
+    assert_equal 402, status
+
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+
+    status, headers, response_body = middleware.call(
+      minimal_env.merge(
+        "HTTP_AUTHORIZATION" => credential.to_authorization,
+        "rack.input" => StringIO.new(body)
+      )
+    )
+
+    assert_equal 200, status
+    assert headers.key?("Payment-Receipt")
+    assert_equal [body], response_body
+  end
+
+  def test_preserves_non_rewindable_request_body_for_app
+    handler = mock_handler
+    seen_body = nil
+    app = lambda { |env|
+      env["mpp.charge"] = {amount: "1.00"}
+      seen_body = env["rack.input"].read
+      [200, {}, [env["rack.input"].read]]
+    }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+    body = "{\"query\":\"paid\"}"
+
+    status, _headers, _response_body = middleware.call(
+      minimal_env.merge("rack.input" => NonRewindableInput.new(body))
+    )
+
+    assert_equal 402, status
+    assert_equal body, seen_body
   end
 
   private
@@ -99,5 +261,29 @@ class TestMiddleware < Minitest::Test
       realm: @realm,
       secret_key: @secret_key
     )
+  end
+
+  class NonRewindableInput
+    def initialize(body)
+      @input = StringIO.new(body)
+    end
+
+    def read(*args)
+      @input.read(*args)
+    end
+  end
+
+  class CountingInput
+    attr_reader :reads
+
+    def initialize(body)
+      @input = StringIO.new(body)
+      @reads = 0
+    end
+
+    def read(*args)
+      @reads += 1
+      @input.read(*args)
+    end
   end
 end

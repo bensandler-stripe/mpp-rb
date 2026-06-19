@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require_relative "defaults"
+require_relative "fee_payer_policy"
 require_relative "transaction"
 
 module Mpp
@@ -67,13 +68,21 @@ module Mpp
           memo = method_details["memo"]
           memo ||= Attribution.encode(server_id: challenge.realm, client_id: @client_id, challenge_id: challenge.id)
 
-          # Resolve RPC URL from challenge's chainId
+          # Resolve RPC URL from challenge's chainId. Normalize the configured pin
+          # once (it may be a String from ENV/config) so it compares equal to
+          # integer chain ids everywhere, including the downstream RPC check.
           resolved_rpc_url = @rpc_url
           expected_chain_id = nil
+          configured_chain_id = @chain_id.nil? ? nil : Integer(@chain_id)
           challenge_chain_id = method_details["chainId"]
           if challenge_chain_id
             begin
               parsed_chain_id = Integer(challenge_chain_id)
+              # Chain pinning: reject a challenge whose chainId conflicts with the
+              # configured chain, before any RPC call or signing.
+              if configured_chain_id && parsed_chain_id != configured_chain_id
+                raise TransactionError, "Chain ID mismatch: expected #{configured_chain_id}, got #{parsed_chain_id}"
+              end
               resolved = Defaults::CHAIN_RPC_URLS[parsed_chain_id]
               if resolved
                 resolved_rpc_url = resolved
@@ -84,7 +93,7 @@ module Mpp
             end
           end
 
-          expected_chain_id ||= @chain_id
+          expected_chain_id ||= configured_chain_id
 
           # Proof mode: sign EIP-712 typed data (no transaction needed)
           if mode == :proof
@@ -94,7 +103,8 @@ module Mpp
             signature = Proof.sign(
               account: @account,
               chain_id: chain_id,
-              challenge_id: challenge.id
+              challenge_id: challenge.id,
+              realm: challenge.realm
             )
 
             return Mpp::Credential.new(
@@ -174,6 +184,11 @@ module Mpp
             raise TransactionError,
               "Chain ID mismatch: RPC returned #{chain_id}, expected #{expected_chain_id} from challenge"
           end
+          if awaiting_fee_payer
+            policy = FeePayerPolicy.for_chain_id(chain_id)
+            max_fee_per_gas = [gas_price, policy.max_fee_per_gas].min
+            max_priority_fee_per_gas = [gas_price, policy.max_priority_fee_per_gas].min
+          end
 
           if awaiting_fee_payer
             resolved_nonce_key = EXPIRING_NONCE_KEY
@@ -197,6 +212,8 @@ module Mpp
             chain_id: chain_id,
             gas_limit: gas_limit,
             gas_price: gas_price,
+            max_priority_fee_per_gas: max_priority_fee_per_gas,
+            max_fee_per_gas: max_fee_per_gas,
             nonce: resolved_nonce,
             nonce_key: resolved_nonce_key,
             currency: currency,

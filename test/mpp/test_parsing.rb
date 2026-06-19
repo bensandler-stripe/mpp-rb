@@ -202,6 +202,15 @@ class TestParsing < Minitest::Test
     assert_instance_of Time, receipt.timestamp
   end
 
+  def test_receipt_success_factory_preserves_extra
+    receipt = Mpp::Receipt.success(
+      "0xdeadbeef",
+      extra: {"trace_id" => "trace-123"}
+    )
+
+    assert_equal({"trace_id" => "trace-123"}, receipt.extra)
+  end
+
   def test_parse_payment_receipt_rejects_invalid_method_ids
     invalid_payment_method_ids.each do |payment_method|
       payload = {
@@ -292,6 +301,24 @@ class TestParsing < Minitest::Test
     assert_equal challenge.id, result[0].id
   end
 
+  def test_from_www_authenticate_list_leading_whitespace
+    challenge = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"}
+    )
+    # A header carrying leading optional whitespace (RFC 9110 OWS) must still
+    # surface the Payment challenge; the first scheme is a boundary even when
+    # whitespace precedes it.
+    header = "   #{challenge.to_www_authenticate("api.example.com")}"
+    result = Mpp::Challenge.from_www_authenticate_list(header)
+
+    assert_equal 1, result.length
+    assert_equal challenge.id, result[0].id
+  end
+
   def test_from_www_authenticate_list_multiple
     c1 = Mpp::Challenge.create(
       secret_key: "s1",
@@ -313,6 +340,75 @@ class TestParsing < Minitest::Test
     assert_equal 2, result.length
     assert_equal "tempo", result[0].method
     assert_equal "other", result[1].method
+  end
+
+  def test_from_www_authenticate_list_ignores_payment_scheme_inside_quotes
+    c1 = Mpp::Challenge.create(
+      secret_key: "s1",
+      realm: "api, Payment realm",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "100"}
+    )
+    c2 = Mpp::Challenge.create(
+      secret_key: "s2",
+      realm: "api.example.com",
+      method: "stripe",
+      intent: "charge",
+      request: {"amount" => "200"}
+    )
+    header = "#{c1.to_www_authenticate("api, Payment realm")}, #{c2.to_www_authenticate("api.example.com")}"
+    result = Mpp::Challenge.from_www_authenticate_list(header)
+
+    assert_equal 2, result.length
+    assert_equal "api, Payment realm", result[0].realm
+    assert_equal "tempo", result[0].method
+    assert_equal "stripe", result[1].method
+  end
+
+  def test_from_www_authenticate_list_stops_before_next_non_payment_scheme
+    challenge = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"}
+    )
+    header = "#{challenge.to_www_authenticate("api.example.com")}, Bearer realm=\"fallback\""
+    result = Mpp::Challenge.from_www_authenticate_list(header)
+
+    assert_equal 1, result.length
+    assert_equal challenge.id, result[0].id
+  end
+
+  def test_from_www_authenticate_list_allows_whitespace_around_param_equals
+    header = 'Payment id="ch", realm = "api", method="tempo", intent="charge", request="e30"'
+    result = Mpp::Challenge.from_www_authenticate_list(header)
+
+    # OWS around "=" (key\s*=\s*value) must not be mistaken for a new scheme
+    # after a comma, so the challenge stays whole instead of truncating at realm.
+    assert_equal 1, result.length
+    assert_equal "tempo", result[0].method
+  end
+
+  def test_from_www_authenticate_list_ignores_interleaved_non_payment_scheme
+    first = Mpp::Challenge.create(secret_key: "s", realm: "api.example.com", method: "tempo",
+      intent: "charge", request: {"amount" => "1"})
+    second = Mpp::Challenge.create(secret_key: "s", realm: "api.example.com", method: "tempo",
+      intent: "charge", request: {"amount" => "2"})
+    header = [
+      first.to_www_authenticate("api.example.com"),
+      'Bearer realm="fallback"',
+      second.to_www_authenticate("api.example.com")
+    ].join(", ")
+
+    result = Mpp::Challenge.from_www_authenticate_list(header)
+
+    # The interleaved Bearer scheme must terminate the first chunk rather than
+    # folding into it (which would surface as a duplicate realm parse error).
+    assert_equal 2, result.length
+    assert_equal first.id, result[0].id
+    assert_equal second.id, result[1].id
   end
 
   def test_from_www_authenticate_list_empty
