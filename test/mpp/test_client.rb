@@ -317,6 +317,66 @@ class TestClientTransport < Minitest::Test
     assert_equal "403", response.code
     assert_equal [[challenge.id, "403", "Payment verification failed: retry returned HTTP 403."]], seen
   end
+
+  def test_handles_merged_payment_challenges
+    unsupported = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "api.example.com",
+      method: "other",
+      intent: "charge",
+      request: {"amount" => "1000000"},
+      expires: Mpp::Expires.minutes(5)
+    )
+    supported = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"},
+      expires: Mpp::Expires.minutes(5)
+    )
+    www_auth = "#{unsupported.to_www_authenticate("api.example.com")}, #{supported.to_www_authenticate("api.example.com")}"
+
+    stub_request(:get, "https://api.example.com/resource")
+      .to_return(status: 402, headers: {"WWW-Authenticate" => www_auth})
+      .then
+      .to_return(status: 200, body: "paid")
+
+    response = @transport.get("https://api.example.com/resource")
+
+    assert_equal "200", response.code
+    assert_equal "paid", response.body
+  end
+
+  def test_handles_merged_challenges_with_a_malformed_leading_chunk
+    seen = []
+    @transport.on_payment_failed { |payload| seen << payload[:error] }
+
+    supported = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"},
+      expires: Mpp::Expires.minutes(5)
+    )
+    # A malformed Payment challenge precedes a valid supported one in the same
+    # merged WWW-Authenticate value. The bad chunk must not hide the good one.
+    www_auth = "Payment invalidbase64!!!, #{supported.to_www_authenticate("api.example.com")}"
+
+    stub_request(:get, "https://api.example.com/resource")
+      .to_return(status: 402, headers: {"WWW-Authenticate" => www_auth})
+      .then
+      .to_return(status: 200, body: "paid")
+
+    response = @transport.get("https://api.example.com/resource")
+
+    assert_equal "200", response.code
+    assert_equal "paid", response.body
+    # The malformed leading chunk is still reported, it just no longer hides
+    # the supported challenge that follows it.
+    assert(seen.any? { |e| e.is_a?(Mpp::ParseError) })
+  end
 end
 
 class TestClientConvenience < Minitest::Test
