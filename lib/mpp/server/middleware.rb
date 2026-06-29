@@ -5,34 +5,37 @@ require "stringio"
 
 module Mpp
   module Server
-    # Rack middleware that intercepts requests requiring payment.
+    # Rack middleware that gates endpoints behind payment verification.
     #
-    # The downstream app signals payment is needed by setting env["mpp.charge"]
-    # to a hash with at least :amount, and optionally :currency, :recipient,
-    # :description, :expires, etc.
+    # The pricing proc determines which requests require payment and at what
+    # price. It receives the Rack env and must return a charge options hash
+    # (with at least :amount) or nil for free endpoints. The pricing proc
+    # MUST NOT produce side effects.
+    #
+    # Payment is verified BEFORE the downstream app runs — if verification
+    # fails, the app never executes and a 402 challenge is returned.
     #
     # Example:
-    #   use Mpp::Server::Middleware, handler: my_handler
-    #
-    #   # In your app:
-    #   env["mpp.charge"] = { amount: "1.00" }
+    #   use Mpp::Server::Middleware,
+    #       handler: my_handler,
+    #       pricing: ->(env) { {amount: "1.00"} if env["PATH_INFO"] == "/paid" }
     class Middleware
       extend T::Sig
 
-      sig { params(app: T.untyped, handler: Mpp::Server::MppHandler).void }
-      def initialize(app, handler:)
+      sig { params(app: T.untyped, handler: Mpp::Server::MppHandler, pricing: T.untyped).void }
+      def initialize(app, handler:, pricing:)
         @app = T.let(app, T.untyped)
         @handler = T.let(handler, Mpp::Server::MppHandler)
+        @pricing = T.let(pricing, T.untyped)
       end
 
       sig { params(env: T.untyped).returns(T::Array[T.untyped]) }
       def call(env)
+        charge_opts = @pricing.call(env)
+        return @app.call(env) unless charge_opts
+
         authorization = env["HTTP_AUTHORIZATION"]
         body_capture = capture_request_body(env)
-        status, headers, body = @app.call(env)
-
-        charge_opts = env["mpp.charge"]
-        return [status, headers, body] unless charge_opts
 
         request_body = body_capture&.materialize
         env["rack.input"] = StringIO.new(request_body || "") if body_capture
@@ -49,6 +52,7 @@ module Mpp
         end
 
         _credential, receipt = result
+        status, headers, body = @app.call(env)
         headers["Payment-Receipt"] = receipt.to_payment_receipt
         self.class.mark_authorization_bound_response(headers)
 

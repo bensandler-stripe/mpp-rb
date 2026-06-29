@@ -9,9 +9,42 @@ class TestMiddleware < Minitest::Test
     @realm = "api.example.com"
   end
 
-  def test_passes_through_when_no_charge
+  def test_app_does_not_run_when_payment_fails
+    invocations = 0
+    app = lambda { |_env|
+      invocations += 1
+      [200, {}, ["OK"]]
+    }
+    pricing = ->(_env) { {amount: "1.00"} }
+    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler, pricing: pricing)
+
+    status, _headers, _body = middleware.call(minimal_env)
+
+    assert_equal 402, status
+    assert_equal 0, invocations, "App handler must NOT run when payment verification fails"
+  end
+
+  def test_app_does_not_run_with_garbage_authorization
+    invocations = 0
+    app = lambda { |_env|
+      invocations += 1
+      [200, {}, ["OK"]]
+    }
+    pricing = ->(_env) { {amount: "1.00"} }
+    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler, pricing: pricing)
+
+    status, _headers, _body = middleware.call(
+      minimal_env.merge("HTTP_AUTHORIZATION" => "garbage-not-a-real-credential")
+    )
+
+    assert_equal 402, status
+    assert_equal 0, invocations, "App handler must NOT run with invalid authorization"
+  end
+
+  def test_passes_through_when_pricing_returns_nil
     app = ->(_env) { [200, {"Content-Type" => "text/plain"}, ["OK"]] }
-    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler)
+    pricing = ->(_env) { nil }
+    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler, pricing: pricing)
 
     status, headers, body = middleware.call(minimal_env)
 
@@ -20,24 +53,10 @@ class TestMiddleware < Minitest::Test
     assert_equal "text/plain", headers["Content-Type"]
   end
 
-  def test_does_not_read_request_body_when_no_charge
-    input = CountingInput.new("x" * 1024)
+  def test_returns_402_when_no_auth_header
     app = ->(_env) { [200, {}, ["OK"]] }
-    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler)
-
-    status, _headers, body = middleware.call(minimal_env.merge("rack.input" => input))
-
-    assert_equal 200, status
-    assert_equal ["OK"], body
-    assert_equal 0, input.reads
-  end
-
-  def test_returns_402_when_charge_requested_without_auth
-    app = lambda { |env|
-      env["mpp.charge"] = {amount: "1.00"}
-      [200, {}, ["OK"]]
-    }
-    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler)
+    pricing = ->(_env) { {amount: "1.00"} }
+    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler, pricing: pricing)
 
     status, headers, _body = middleware.call(minimal_env)
 
@@ -49,8 +68,10 @@ class TestMiddleware < Minitest::Test
   end
 
   def test_attaches_receipt_on_successful_payment
-    # Build a valid credential from a challenge
     handler = mock_handler
+    pricing = ->(_env) { {amount: "1.00"} }
+
+    # Get a challenge first
     challenge = handler.charge(nil, "1.00", mppx_scope: {"resource" => "/resource"})
     assert_instance_of Mpp::Challenge, challenge
 
@@ -62,11 +83,8 @@ class TestMiddleware < Minitest::Test
     )
     auth_header = credential.to_authorization
 
-    app = lambda { |env|
-      env["mpp.charge"] = {amount: "1.00"}
-      [200, {}, ["OK"]]
-    }
-    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+    app = ->(_env) { [200, {}, ["OK"]] }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler, pricing: pricing)
 
     env = minimal_env.merge("HTTP_AUTHORIZATION" => auth_header)
     status, headers, body = middleware.call(env)
@@ -80,11 +98,9 @@ class TestMiddleware < Minitest::Test
 
   def test_rejects_paid_retry_with_different_auto_route_scope
     handler = mock_handler
-    app = lambda { |env|
-      env["mpp.charge"] = {amount: "1.00"}
-      [200, {}, ["OK"]]
-    }
-    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+    pricing = ->(_env) { {amount: "1.00"} }
+    app = ->(_env) { [200, {}, ["OK"]] }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler, pricing: pricing)
 
     status, headers, _body = middleware.call(
       minimal_env.merge(
@@ -120,11 +136,9 @@ class TestMiddleware < Minitest::Test
 
   def test_normalizes_method_prefixed_sinatra_route_scope
     handler = mock_handler
-    app = lambda { |env|
-      env["mpp.charge"] = {amount: "1.00"}
-      [200, {}, ["OK"]]
-    }
-    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+    pricing = ->(_env) { {amount: "1.00"} }
+    app = ->(_env) { [200, {}, ["OK"]] }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler, pricing: pricing)
 
     status, headers, _body = middleware.call(
       minimal_env.merge(
@@ -144,12 +158,9 @@ class TestMiddleware < Minitest::Test
 
   def test_rejects_paid_retry_with_tampered_body_digest
     handler = mock_handler
-    app = lambda { |env|
-      env["mpp.charge"] = {amount: "1.00"}
-      env["rack.input"].read
-      [200, {}, ["OK"]]
-    }
-    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+    pricing = ->(_env) { {amount: "1.00"} }
+    app = ->(_env) { [200, {}, ["OK"]] }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler, pricing: pricing)
 
     status, headers, _body = middleware.call(
       minimal_env.merge("rack.input" => StringIO.new("{\"query\":\"paid\"}"))
@@ -178,11 +189,11 @@ class TestMiddleware < Minitest::Test
 
   def test_accepts_paid_retry_with_matching_body_digest
     handler = mock_handler
+    pricing = ->(_env) { {amount: "1.00"} }
     app = lambda { |env|
-      env["mpp.charge"] = {amount: "1.00"}
       [200, {}, [env["rack.input"].read]]
     }
-    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+    middleware = Mpp::Server::Middleware.new(app, handler: handler, pricing: pricing)
 
     body = "{\"query\":\"paid\"}"
     status, headers, _response_body = middleware.call(
@@ -208,22 +219,52 @@ class TestMiddleware < Minitest::Test
     assert_equal [body], response_body
   end
 
-  def test_preserves_non_rewindable_request_body_for_app
+  def test_does_not_read_request_body_when_pricing_returns_nil
+    input = CountingInput.new("x" * 1024)
+    app = ->(_env) { [200, {}, ["OK"]] }
+    pricing = ->(_env) { nil }
+    middleware = Mpp::Server::Middleware.new(app, handler: mock_handler, pricing: pricing)
+
+    status, _headers, body = middleware.call(minimal_env.merge("rack.input" => input))
+
+    assert_equal 200, status
+    assert_equal ["OK"], body
+    assert_equal 0, input.reads
+  end
+
+  def test_preserves_request_body_for_app_after_successful_payment
     handler = mock_handler
+    pricing = ->(_env) { {amount: "1.00"} }
     seen_body = nil
     app = lambda { |env|
-      env["mpp.charge"] = {amount: "1.00"}
       seen_body = env["rack.input"].read
-      [200, {}, [env["rack.input"].read]]
+      [200, {}, ["OK"]]
     }
-    middleware = Mpp::Server::Middleware.new(app, handler: handler)
+    middleware = Mpp::Server::Middleware.new(app, handler: handler, pricing: pricing)
+
     body = "{\"query\":\"paid\"}"
 
-    status, _headers, _response_body = middleware.call(
-      minimal_env.merge("rack.input" => NonRewindableInput.new(body))
+    # First request to get a challenge
+    status, headers, _response_body = middleware.call(
+      minimal_env.merge("rack.input" => StringIO.new(body))
+    )
+    assert_equal 402, status
+
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
     )
 
-    assert_equal 402, status
+    # Second request with valid credential
+    status, _headers, _response_body = middleware.call(
+      minimal_env.merge(
+        "HTTP_AUTHORIZATION" => credential.to_authorization,
+        "rack.input" => StringIO.new(body)
+      )
+    )
+
+    assert_equal 200, status
     assert_equal body, seen_body
   end
 
