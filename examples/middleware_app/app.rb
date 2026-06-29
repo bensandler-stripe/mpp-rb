@@ -1,4 +1,5 @@
-# typed: false
+# typed: ignore
+
 require "dotenv/load"
 require "sinatra/base"
 require "json"
