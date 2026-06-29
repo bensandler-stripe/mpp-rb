@@ -43,7 +43,7 @@ class TestMiddleware < Minitest::Test
 
   def test_passes_through_when_pricing_returns_nil
     app = ->(_env) { [200, {"Content-Type" => "text/plain"}, ["OK"]] }
-    pricing = ->(_env) { nil }
+    pricing = ->(_env) {}
     middleware = Mpp::Server::Middleware.new(app, handler: mock_handler, pricing: pricing)
 
     status, headers, body = middleware.call(minimal_env)
@@ -222,7 +222,7 @@ class TestMiddleware < Minitest::Test
   def test_does_not_read_request_body_when_pricing_returns_nil
     input = CountingInput.new("x" * 1024)
     app = ->(_env) { [200, {}, ["OK"]] }
-    pricing = ->(_env) { nil }
+    pricing = ->(_env) {}
     middleware = Mpp::Server::Middleware.new(app, handler: mock_handler, pricing: pricing)
 
     status, _headers, body = middleware.call(minimal_env.merge("rack.input" => input))
