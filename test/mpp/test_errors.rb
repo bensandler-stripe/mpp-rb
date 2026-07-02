@@ -57,6 +57,7 @@ class TestErrors < Minitest::Test
     assert_equal "Payment Required", details["title"]
     assert_equal 402, details["status"]
     assert details.key?("detail")
+    assert_equal Mpp::Hints::PAYMENT_REQUIRED, details["hint"]
   end
 
   def test_to_problem_details_with_challenge_id
@@ -64,6 +65,7 @@ class TestErrors < Minitest::Test
     details = error.to_problem_details(challenge_id: "ch_123")
 
     assert_equal "ch_123", details["challengeId"]
+    refute details.key?("hint"), "errors without a default hint should not include hint in problem details"
   end
 
   def test_verification_error
@@ -76,6 +78,43 @@ class TestErrors < Minitest::Test
     error = Mpp::ParseError.new("bad header")
 
     assert_equal "bad header", error.message
+  end
+
+  def test_payment_required_error_has_hint
+    error = Mpp::PaymentRequiredError.new
+    assert_equal Mpp::Hints::PAYMENT_REQUIRED, error.hint
+  end
+
+  def test_malformed_credential_error_has_hint
+    error = Mpp::MalformedCredentialError.new
+    assert_equal Mpp::Hints::MALFORMED_CREDENTIAL, error.hint
+  end
+
+  def test_method_unsupported_error_has_hint
+    error = Mpp::PaymentMethodUnsupportedError.new
+    assert_equal Mpp::Hints::METHOD_UNSUPPORTED, error.hint
+  end
+
+  def test_other_errors_have_no_hint
+    error = Mpp::VerificationFailedError.new
+    assert_nil error.hint
+
+    error2 = Mpp::InvalidChallengeError.new
+    assert_nil error2.hint
+  end
+
+  def test_hint_included_in_problem_details_when_present
+    error = Mpp::MalformedCredentialError.new(reason: "bad encoding")
+    details = error.to_problem_details
+
+    assert_equal Mpp::Hints::MALFORMED_CREDENTIAL, details["hint"]
+  end
+
+  def test_hint_excluded_from_problem_details_when_nil
+    error = Mpp::PaymentExpiredError.new
+    details = error.to_problem_details
+
+    refute details.key?("hint")
   end
 
   def test_all_error_types_have_correct_slugs

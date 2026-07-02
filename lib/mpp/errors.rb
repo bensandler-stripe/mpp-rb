@@ -30,6 +30,7 @@ module Mpp
       end
       subclass.instance_variable_set(:@title, to_title(name)) unless subclass.instance_variable_defined?(:@title)
       subclass.instance_variable_set(:@status, 402) unless subclass.instance_variable_defined?(:@status)
+      subclass.instance_variable_set(:@hint, nil) unless subclass.instance_variable_defined?(:@hint)
     end
 
     class << self
@@ -43,6 +44,9 @@ module Mpp
 
       sig { returns(T.nilable(String)) }
       attr_reader :title
+
+      sig { returns(T.nilable(String)) }
+      attr_reader :hint
 
       private
 
@@ -60,6 +64,7 @@ module Mpp
     @status = T.let(402, Integer)
     @type = T.let("#{BASE_URI}/payment-error", String)
     @title = T.let("Payment Error", String)
+    @hint = T.let(nil, T.nilable(String))
 
     sig { returns(T.untyped) }
     def status = self.class.status
@@ -67,6 +72,8 @@ module Mpp
     def type = self.class.type
     sig { returns(T.untyped) }
     def title = self.class.title
+    sig { returns(T.untyped) }
+    def hint = self.class.hint
 
     # Convert to RFC 9457 Problem Details format.
     sig { params(challenge_id: T.untyped).returns(T::Hash[T.untyped, T.untyped]) }
@@ -77,13 +84,25 @@ module Mpp
         "status" => status,
         "detail" => message
       }
+      details["hint"] = hint if hint
       details["challengeId"] = challenge_id if challenge_id
       details
     end
   end
 
+  # Default hint messages for payment errors.
+  module Hints
+    PAYMENT_REQUIRED = "Use a supported wallet to pay for this resource using one of the supported " \
+      "payment methods returned in the WWW-Authenticate header. See https://mpp.dev/tools/wallet.md"
+    MALFORMED_CREDENTIAL = "Use a supported wallet to construct valid credentials for one of the supported " \
+      "payment methods returned in the WWW-Authenticate header. See https://mpp.dev/tools/wallet.md"
+    METHOD_UNSUPPORTED = PAYMENT_REQUIRED
+  end
+
   class PaymentRequiredError < PaymentError
     extend T::Sig
+
+    @hint = T.let(Hints::PAYMENT_REQUIRED, T.nilable(String))
 
     sig { params(realm: T.untyped, description: T.untyped).void }
     def initialize(realm: nil, description: nil)
@@ -96,6 +115,8 @@ module Mpp
 
   class MalformedCredentialError < PaymentError
     extend T::Sig
+
+    @hint = T.let(Hints::MALFORMED_CREDENTIAL, T.nilable(String))
 
     sig { params(reason: T.untyped).void }
     def initialize(reason: nil)
@@ -173,6 +194,7 @@ module Mpp
     @status = T.let(400, Integer)
     @type = T.let("#{BASE_URI}/method-unsupported", String)
     @title = T.let("Method Unsupported", String)
+    @hint = T.let(Hints::METHOD_UNSUPPORTED, T.nilable(String))
 
     sig { params(method: T.untyped).void }
     def initialize(method: nil)
