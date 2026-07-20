@@ -174,6 +174,7 @@ class TestParsing < Minitest::Test
     assert_equal "success", parsed.status
     assert_equal "0xabc123", parsed.reference
     assert_equal "tempo", parsed.method
+    assert_nil parsed.subscription_id
     assert_equal 2026, parsed.timestamp.year
     assert_equal 1, parsed.timestamp.month
     assert_equal 15, parsed.timestamp.day
@@ -193,6 +194,39 @@ class TestParsing < Minitest::Test
     assert_equal "order-456", parsed.external_id
   end
 
+  def test_receipt_with_subscription_id
+    receipt = Mpp::Receipt.new(
+      status: "success",
+      timestamp: Time.utc(2026, 1, 15, 12, 0, 30),
+      reference: "0xabc123",
+      method: "tempo",
+      subscription_id: "sub_123"
+    )
+
+    encoded = receipt.to_payment_receipt
+    payload = Mpp::Parsing.b64_decode(encoded)
+    parsed = Mpp::Receipt.from_payment_receipt(encoded)
+
+    assert_equal "sub_123", payload["subscriptionId"]
+    assert_equal "sub_123", parsed.subscription_id
+  end
+
+  def test_foreign_subscription_receipt_roundtrip
+    encoded = Mpp::Parsing.b64_encode(
+      "status" => "success",
+      "timestamp" => "2026-01-15T12:00:30Z",
+      "reference" => "0xabc123",
+      "method" => "tempo",
+      "subscriptionId" => "sub_foreign"
+    )
+
+    parsed = Mpp::Receipt.from_payment_receipt(encoded)
+    roundtrip = Mpp::Parsing.b64_decode(parsed.to_payment_receipt)
+
+    assert_equal "sub_foreign", parsed.subscription_id
+    assert_equal "sub_foreign", roundtrip["subscriptionId"]
+  end
+
   def test_receipt_success_factory
     receipt = Mpp::Receipt.success("0xdeadbeef")
 
@@ -209,6 +243,15 @@ class TestParsing < Minitest::Test
     )
 
     assert_equal({"trace_id" => "trace-123"}, receipt.extra)
+  end
+
+  def test_receipt_success_factory_preserves_subscription_id
+    receipt = Mpp::Receipt.success(
+      "0xdeadbeef",
+      subscription_id: "sub_123"
+    )
+
+    assert_equal "sub_123", receipt.subscription_id
   end
 
   def test_parse_payment_receipt_rejects_invalid_method_ids

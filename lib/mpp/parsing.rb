@@ -235,6 +235,7 @@ module Mpp
         reference: data["reference"].to_s,
         method: method,
         external_id: data["externalId"]&.to_s,
+        subscription_id: data["subscriptionId"]&.to_s,
         extra: extra
       )
     end
@@ -256,6 +257,7 @@ module Mpp
         "timestamp" => timestamp_str
       }
       payload["externalId"] = receipt.external_id if receipt.external_id
+      payload["subscriptionId"] = receipt.subscription_id if receipt.subscription_id
       payload["extra"] = receipt.extra if receipt.extra
 
       b64_encode(payload)
