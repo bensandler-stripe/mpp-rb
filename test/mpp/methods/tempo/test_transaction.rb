@@ -237,6 +237,21 @@ class TestTempoTransaction < Minitest::Test
     assert_includes error.message, "contains unauthorized extra calls"
   end
 
+  def test_charge_intent_rejects_fee_payer_envelope_with_padded_calldata
+    skip "eth/rlp gems not available" unless eth_and_rlp_available?
+
+    padded_data = transfer_with_memo_data + ("01" * 2400)
+    padded_call = Mpp::Methods::Tempo::Transaction::Call.new(to: CURRENCY, value: 0, data: padded_data)
+    raw_tx = build_fee_payer_envelope(calls: [padded_call])
+    intent = configured_fee_payer_intent
+
+    error = assert_raises(Mpp::VerificationError) do
+      intent.send(:cosign_as_fee_payer, raw_tx, CURRENCY, request: charge_request, challenge: charge_challenge)
+    end
+
+    assert_includes error.message, "trailing padding"
+  end
+
   def test_charge_intent_cosigns_fee_payer_envelope_with_challenge_bound_memo
     skip "eth/rlp gems not available" unless eth_and_rlp_available?
 

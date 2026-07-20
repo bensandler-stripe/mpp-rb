@@ -703,6 +703,10 @@ module Mpp
           }
         end
 
+        # Expected calldata length for transferWithMemo(address,uint256,bytes32):
+        # 4 (selector) + 32 (address) + 32 (amount) + 32 (memo) = 100 bytes = 200 hex chars
+        MAX_TRANSFER_CALLDATA_HEX_LENGTH = 200
+
         def validate_fee_payer_calls(calls, request, challenge: nil)
           if calls.length != 1
             raise Mpp::VerificationError, "Invalid transaction: contains unauthorized extra calls"
@@ -715,7 +719,14 @@ module Mpp
           unless call.to.downcase == request.currency.downcase
             raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
           end
-          unless match_transfer_calldata(call.data.delete_prefix("0x"), request, challenge: challenge)
+
+          call_data_hex = call.data.delete_prefix("0x")
+          if call_data_hex.length > MAX_TRANSFER_CALLDATA_HEX_LENGTH
+            raise Mpp::VerificationError,
+              "Invalid transaction: calldata contains trailing padding (#{call_data_hex.length / 2} bytes, expected #{MAX_TRANSFER_CALLDATA_HEX_LENGTH / 2})"
+          end
+
+          unless match_transfer_calldata(call_data_hex, request, challenge: challenge)
             raise Mpp::VerificationError, "Invalid transaction: no matching payment call found"
           end
         end
