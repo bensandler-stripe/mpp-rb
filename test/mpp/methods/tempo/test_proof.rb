@@ -31,12 +31,78 @@ class TestTempoProof < Minitest::Test
 
   # --- ABI conformance (the create-intent/challenge ABI fixture) ---
 
-  def test_domain_version_is_2
-    assert_equal "2", Proof::DOMAIN_VERSION
+  def test_domain_version_is_3
+    assert_equal "3", Proof::DOMAIN_VERSION
   end
 
-  def test_proof_type_hash_binds_challenge_id_and_realm
-    assert_equal "Proof(string challengeId,string realm)", Proof::PROOF_TYPE_HASH
+  def test_proof_type_hash_binds_account_challenge_id_and_realm
+    assert_equal "Proof(address account,string challengeId,string realm)", Proof::PROOF_TYPE_HASH
+  end
+
+  # Shared vector, pinned identically in mpp-go (proof_vectors_test.go),
+  # mpp-rs (test_signing_hash_matches_mppx_v3_vector) and mppx
+  # (Proof.conformance.test.ts). If this drifts, mpp-rb has silently stopped
+  # interoperating with the other SDKs.
+  def test_signing_hash_matches_cross_sdk_vector
+    skip "eth gem not available" unless @eth_available
+
+    hash = Proof.signing_hash(
+      chain_id: 42431,
+      account: "0x1a642f0E3c3aF545E7AcBD38b07251B3990914F1",
+      challenge_id: "kM9xPqWvT2nJrHsY4aDfEb",
+      realm: "api.example.com"
+    )
+
+    assert_equal "0x3860a700a55e02ad3c2dc047e92489feceecbdb0a801d948e1d9f0b61ea9bc3f",
+      "0x#{hash.unpack1("H*")}"
+  end
+
+  # A signature over the old v2 digest (domain version "2", no account field)
+  # must not verify under v3. mppx pins the same negative case.
+  def test_rejects_legacy_v2_proof
+    skip "eth gem not available" unless @eth_available
+
+    acct = account(KEY_A)
+    legacy_domain = Proof.keccak256(
+      Proof.abi_encode(
+        Proof.keccak256(Proof::DOMAIN_TYPE_HASH),
+        Proof.keccak256("MPP"),
+        Proof.keccak256("2"),
+        Proof.uint256(CHAIN_ID)
+      )
+    )
+    legacy_struct = Proof.keccak256(
+      Proof.abi_encode(
+        Proof.keccak256("Proof(string challengeId,string realm)"),
+        Proof.keccak256(CHALLENGE_ID),
+        Proof.keccak256(REALM)
+      )
+    )
+    legacy_hash = Proof.keccak256("\x19\x01".b + legacy_domain + legacy_struct)
+    legacy_sig = "0x#{acct.sign_hash(legacy_hash).unpack1("H*")}"
+
+    refute Proof.verify(
+      address: acct.address.to_s,
+      chain_id: CHAIN_ID,
+      challenge_id: CHALLENGE_ID,
+      realm: REALM,
+      signature: legacy_sig
+    )
+  end
+
+  # The signature commits to one payer, so it cannot be presented as a proof
+  # for a different account.
+  def test_proof_does_not_transfer_to_another_account
+    skip "eth gem not available" unless @eth_available
+
+    acct = account(KEY_A)
+    other = account(KEY_B)
+    sig = Proof.sign(account: acct, chain_id: CHAIN_ID, challenge_id: CHALLENGE_ID, realm: REALM)
+
+    assert Proof.verify(address: acct.address.to_s, chain_id: CHAIN_ID,
+      challenge_id: CHALLENGE_ID, realm: REALM, signature: sig)
+    refute Proof.verify(address: other.address.to_s, chain_id: CHAIN_ID,
+      challenge_id: CHALLENGE_ID, realm: REALM, signature: sig)
   end
 
   # --- source DID (wallet binding carrier) ---
