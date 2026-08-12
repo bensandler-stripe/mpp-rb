@@ -107,7 +107,7 @@ module Mpp
         private
 
         def stripe_idempotency_key(credential)
-          "mpp-stripe-charge-#{credential.challenge.id}"
+          "mpp_#{credential.challenge.id}"
         end
       end
     end
