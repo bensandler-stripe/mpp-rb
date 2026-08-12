@@ -137,7 +137,7 @@ class TestStripeChargeIntent < Minitest::Test
       assert_equal ["card", "link"], params[:payment_method_types]
       refute params.key?(:automatic_payment_methods)
       assert_equal({"order" => "123"}, params[:metadata])
-      assert_equal "mpp-stripe-charge-test-id", opts[:idempotency_key]
+      assert_equal "mpp_test-id", opts[:idempotency_key]
     end)
 
     receipt = intent_with_payment_intents(payment_intents).verify(credential, request)
