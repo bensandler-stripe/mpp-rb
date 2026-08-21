@@ -82,13 +82,7 @@ module Mpp
         [@credential, @receipt]
       end
 
-      sig { returns(T.nilable(String)) }
-      def payment_response
-        value = @extra_headers["PAYMENT-RESPONSE"]
-        value.is_a?(String) ? value : nil
-      end
-
-      # Render a 402 challenge response hash, including extra x402 headers.
+      # Render a 402 challenge response hash.
       sig { returns(T::Hash[T.untyped, T.untyped]) }
       def to_response
         Kernel.raise ArgumentError, "to_response is only valid for 402 results" unless payment_required?

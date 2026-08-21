@@ -10,7 +10,7 @@ module Mpp
     class MppHandler
       extend T::Sig
 
-      REQUEST_OPTION_KEYS = [:body, :url, :payment_signature, :accept_payment, :http_method].freeze
+      REQUEST_OPTION_KEYS = [:body, :accept_payment].freeze
 
       sig { returns(T.untyped) }
       attr_reader :method
@@ -133,11 +133,8 @@ module Mpp
         entries = charge_methods.map { |candidate| [candidate, offer_opts.merge(amount: amount)] }
         ComposedHandler.from_entries(self, entries).call(
           authorization: authorization,
-          payment_signature: request_opts[:payment_signature],
           body: request_opts[:body],
-          url: request_opts[:url],
-          accept_payment: request_opts[:accept_payment],
-          http_method: request_opts[:http_method]
+          accept_payment: request_opts[:accept_payment]
         )
       end
 
@@ -148,24 +145,8 @@ module Mpp
         raise ArgumentError, "Method #{method.name} does not support charge intent" unless intent
 
         body = kwargs[:body]
-        url = kwargs[:url]
-        payment_signature = kwargs[:payment_signature]
         offer_opts = kwargs.except(*REQUEST_OPTION_KEYS)
         request = build_charge_request(method, amount, **offer_opts)
-
-        if payment_signature && method.respond_to?(:bind_x402_credential)
-          return verify_x402(
-            method,
-            intent,
-            request,
-            payment_signature: payment_signature,
-            url: url,
-            body: body,
-            description: offer_opts[:description],
-            expires: offer_opts[:expires],
-            http_method: kwargs[:http_method]
-          )
-        end
 
         Verify.verify_or_challenge(
           authorization: authorization,
@@ -235,15 +216,11 @@ module Mpp
         Mpp::Server::MethodHelper.transform_request(method, request, nil)
       end
 
-      # Render a 402 response, applying method-specific extra headers (x402).
-      sig { params(challenge: T.untyped, url: T.nilable(String), http_method: T.nilable(String)).returns(T::Hash[T.untyped, T.untyped]) }
-      def challenge_response(challenge, url: nil, http_method: nil)
+      # Render a 402 response for one or more challenges.
+      sig { params(challenge: T.untyped).returns(T::Hash[T.untyped, T.untyped]) }
+      def challenge_response(challenge)
         challenges = challenge.is_a?(Array) ? challenge : [challenge]
-        extra = {}
-        if @methods.length == 1 && @method.respond_to?(:decorate_challenge)
-          @method.decorate_challenge(extra, challenges.first, url: url, http_method: http_method)
-        end
-        Decorator.make_challenge_response(challenges, @realm, extra_headers: extra)
+        Decorator.make_challenge_response(challenges, @realm)
       end
 
       private
@@ -275,84 +252,6 @@ module Mpp
         return found if found
 
         raise ArgumentError, "No handler for #{key.inspect}. Is this method in your methods array?"
-      end
-
-      sig do
-        params(
-          method: T.untyped,
-          intent: T.untyped,
-          request: T::Hash[String, T.untyped],
-          payment_signature: String,
-          url: T.nilable(String),
-          body: T.untyped,
-          description: T.nilable(String),
-          expires: T.nilable(String),
-          http_method: T.nilable(String)
-        ).returns(T.untyped)
-      end
-      def verify_x402(method, intent, request, payment_signature:, url:, body:, description:, expires:, http_method: nil)
-        challenge = Verify.create_challenge(
-          method.name,
-          intent.name,
-          Mpp::Units.transform_units(request),
-          @realm,
-          @secret_key,
-          description,
-          nil,
-          expires,
-          body
-        )
-        method_context = {name: method.name, intent: intent.name}
-
-        begin
-          credential = method.bind_x402_credential(
-            payment_signature,
-            challenge: challenge,
-            request: challenge.request,
-            url: url,
-            body: body,
-            http_method: http_method
-          )
-          receipt = intent.verify(credential, challenge.request)
-        rescue => error
-          if @events.has_handlers?(Mpp::Events::PAYMENT_FAILED)
-            Verify.emit_payment_failed(
-              dispatcher: @events,
-              challenge: challenge,
-              credential: nil,
-              error: error,
-              method: method_context,
-              request: challenge.request,
-              retry_challenge: challenge
-            )
-          end
-          if error.is_a?(Mpp::ParseError) || error.is_a?(Mpp::VerificationError) || error.is_a?(Mpp::PaymentError)
-            if @events.has_handlers?(Mpp::Events::CHALLENGE_CREATED)
-              Verify.emit_challenge_created(
-                dispatcher: @events,
-                challenge: challenge,
-                credential: nil,
-                error: error,
-                method: method_context,
-                request: challenge.request
-              )
-            end
-            return challenge
-          end
-          raise
-        end
-
-        if @events.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
-          Verify.emit_payment_success(
-            dispatcher: @events,
-            challenge: challenge,
-            credential: credential,
-            method: method_context,
-            receipt: receipt,
-            request: challenge.request
-          )
-        end
-        [credential, receipt]
       end
     end
   end
