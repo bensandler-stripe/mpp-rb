@@ -11,7 +11,7 @@ module Mpp
       module_function
 
       # Build a 402 response for one or more payment challenges with RFC 9457
-      # problem details. Extra headers are merged in.
+      # problem details. Extra headers (e.g. PAYMENT-REQUIRED) are merged in.
       sig do
         params(
           challenge: T.untyped,
@@ -38,7 +38,10 @@ module Mpp
 
           headers[key] = value
         end
-        Mpp::Server::Middleware.mark_authorization_bound_response(headers)
+        Mpp::Server::Middleware.mark_authorization_bound_response(
+          headers,
+          vary: extra_headers.key?("PAYMENT-REQUIRED") ? ["Authorization", "PAYMENT-SIGNATURE"] : ["Authorization"]
+        )
         {
           "_mpp_challenge" => true,
           "status" => 402,

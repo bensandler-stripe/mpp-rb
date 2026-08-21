@@ -68,17 +68,17 @@ module Mpp
           end
 
           address = currency.to_s
-          raise ArgumentError, "EVM currency must be a known asset or 0x-prefixed address" unless address.match?(/\A0x[a-fA-F0-9]{40}\z/)
-          raise ArgumentError, "EVM authorization requires `chain_id`." if chain_id.nil?
-          raise ArgumentError, "EVM authorization requires `decimals`." if decimals.nil?
+          Kernel.raise ArgumentError, "EVM currency must be a known asset or 0x-prefixed address" unless address.match?(/\A0x[a-fA-F0-9]{40}\z/)
+          Kernel.raise ArgumentError, "EVM authorization requires `chain_id`." if chain_id.nil?
+          Kernel.raise ArgumentError, "EVM authorization requires `decimals`." if decimals.nil?
 
           auth = authorization_hash(authorization)
-          raise ArgumentError, "EVM authorization requires `authorization` metadata." unless auth
+          Kernel.raise ArgumentError, "EVM authorization requires `authorization` metadata." unless auth
 
           {
             address: checksum(address),
-            chain_id: Integer(chain_id),
-            decimals: Integer(decimals),
+            chain_id: Kernel.Integer(chain_id),
+            decimals: Kernel.Integer(decimals),
             authorization: auth
           }
         end
@@ -92,7 +92,7 @@ module Mpp
 
           name = authorization[:name] || authorization["name"]
           version = authorization[:version] || authorization["version"]
-          raise ArgumentError, "authorization requires name and version" if name.to_s.empty? || version.to_s.empty?
+          Kernel.raise ArgumentError, "authorization requires name and version" if name.to_s.empty? || version.to_s.empty?
 
           {"name" => name.to_s, "version" => version.to_s}
         end
