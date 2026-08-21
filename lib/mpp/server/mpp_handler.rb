@@ -1,4 +1,4 @@
-# typed: strict
+# typed: true
 # frozen_string_literal: true
 
 require_relative "method"
@@ -10,8 +10,13 @@ module Mpp
     class MppHandler
       extend T::Sig
 
+      REQUEST_OPTION_KEYS = [:body, :accept_payment].freeze
+
       sig { returns(T.untyped) }
       attr_reader :method
+
+      sig { returns(T::Array[T.untyped]) }
+      attr_reader :methods
 
       sig { returns(String) }
       attr_reader :realm
@@ -22,9 +27,19 @@ module Mpp
       sig { returns(T::Hash[String, T.untyped]) }
       attr_reader :defaults
 
-      sig { params(method: T.untyped, realm: String, secret_key: String, defaults: T.nilable(T::Hash[String, T.untyped]), events: T.nilable(Mpp::Events::Dispatcher)).void }
-      def initialize(method:, realm:, secret_key:, defaults: nil, events: nil)
-        @method = T.let(method, T.untyped)
+      sig do
+        params(
+          realm: String,
+          secret_key: String,
+          method: T.untyped,
+          methods: T.nilable(T::Array[T.untyped]),
+          defaults: T.nilable(T::Hash[String, T.untyped]),
+          events: T.nilable(Mpp::Events::Dispatcher)
+        ).void
+      end
+      def initialize(realm:, secret_key:, method: nil, methods: nil, defaults: nil, events: nil)
+        @methods = T.let(normalize_methods(method, methods), T::Array[T.untyped])
+        @method = T.let(@methods.first, T.untyped)
         @realm = T.let(realm, String)
         @secret_key = T.let(secret_key, String)
         @defaults = T.let(defaults || {}, T::Hash[String, T.untyped])
@@ -32,10 +47,19 @@ module Mpp
       end
 
       # Create with auto-detected realm and secret_key.
-      sig { params(method: T.untyped, realm: T.untyped, secret_key: T.untyped, events: T.nilable(Mpp::Events::Dispatcher)).returns(T.attached_class) }
-      def self.create(method:, realm: nil, secret_key: nil, events: nil)
+      sig do
+        params(
+          method: T.untyped,
+          methods: T.nilable(T::Array[T.untyped]),
+          realm: T.untyped,
+          secret_key: T.untyped,
+          events: T.nilable(Mpp::Events::Dispatcher)
+        ).returns(T.attached_class)
+      end
+      def self.create(method: nil, methods: nil, realm: nil, secret_key: nil, events: nil)
         new(
           method: method,
+          methods: methods,
           realm: realm || Defaults.detect_realm,
           secret_key: secret_key || Defaults.detect_secret_key,
           events: events
@@ -62,20 +86,100 @@ module Mpp
         on(Mpp::Events::PAYMENT_SUCCESS, handler, &block)
       end
 
-      # Handle a charge intent.
-      sig { params(authorization: T.nilable(String), amount: String, currency: T.nilable(String), recipient: T.nilable(String), expires: T.nilable(String), description: T.nilable(String), external_id: T.nilable(String), memo: T.nilable(String), fee_payer: T::Boolean, chain_id: T.nilable(Integer), extra: T.nilable(T::Hash[String, String]), mppx_scope: T.nilable(T::Hash[String, String]), body: T.untyped).returns(T.untyped) }
-      def charge(authorization, amount, currency: nil, recipient: nil, expires: nil,
-        description: nil, external_id: nil, memo: nil, fee_payer: false, chain_id: nil,
-        extra: nil, mppx_scope: nil, body: nil)
-        intent = @method.intents["charge"]
-        raise ArgumentError, "Method #{@method.name} does not support charge intent" unless intent
+      # Combine method offers into a single callable that presents every method.
+      sig { params(entries: T.untyped).returns(ComposedHandler) }
+      def compose(*entries)
+        ComposedHandler.from_entries(self, entries)
+      end
 
-        resolved_currency = currency || (@method.respond_to?(:currency) ? @method.currency : nil)
-        resolved_recipient = recipient || (@method.respond_to?(:recipient) ? @method.recipient : nil)
+      # Look up a registered method by object, name, or "name/intent" key.
+      sig { params(method_ref: T.untyped).returns(T.untyped) }
+      def resolve_method(method_ref)
+        case method_ref
+        when String
+          resolve_method_key(method_ref)
+        else
+          found = @methods.find { |candidate| candidate.equal?(method_ref) } ||
+            @methods.find { |candidate| candidate.name == method_ref.name }
+          return found if found
+
+          raise ArgumentError, "No handler for #{method_ref.inspect}. Is this method in your methods array?"
+        end
+      end
+
+      # Handle a charge intent.
+      #
+      # With a single registered charge method this returns Challenge or
+      # [Credential, Receipt]. With multiple charge methods it implicitly
+      # composes them and returns a ComposedResult.
+      sig { params(authorization: T.nilable(String), amount: String, kwargs: T.untyped).returns(T.untyped) }
+      def charge(authorization, amount, **kwargs)
+        charge_methods = @methods.select { |candidate| candidate.intents.key?("charge") }
+        raise ArgumentError, "No registered method supports charge intent" if charge_methods.empty?
+
+        request_opts = kwargs.slice(*REQUEST_OPTION_KEYS)
+        offer_opts = kwargs.except(*REQUEST_OPTION_KEYS)
+
+        if charge_methods.length == 1
+          return charge_one(
+            charge_methods.first,
+            authorization,
+            amount,
+            **request_opts,
+            **offer_opts
+          )
+        end
+
+        entries = charge_methods.map { |candidate| [candidate, offer_opts.merge(amount: amount)] }
+        ComposedHandler.from_entries(self, entries).call(
+          authorization: authorization,
+          body: request_opts[:body],
+          accept_payment: request_opts[:accept_payment]
+        )
+      end
+
+      # Verify or challenge a single method. Used by compose and charge.
+      sig { params(method: T.untyped, authorization: T.nilable(String), amount: String, kwargs: T.untyped).returns(T.untyped) }
+      def charge_one(method, authorization, amount, **kwargs)
+        intent = method.intents["charge"]
+        raise ArgumentError, "Method #{method.name} does not support charge intent" unless intent
+
+        body = kwargs[:body]
+        offer_opts = kwargs.except(*REQUEST_OPTION_KEYS)
+        request = build_charge_request(method, amount, **offer_opts)
+
+        Verify.verify_or_challenge(
+          authorization: authorization,
+          intent: intent,
+          request: request,
+          realm: @realm,
+          secret_key: @secret_key,
+          method: method.name,
+          description: offer_opts[:description],
+          expires: offer_opts[:expires],
+          events: @events,
+          body: body
+        )
+      end
+
+      # Build the canonical charge request for a method without verifying.
+      sig { params(method: T.untyped, amount: String, kwargs: T.untyped).returns(T::Hash[String, T.untyped]) }
+      def build_charge_request(method, amount, **kwargs)
+        currency = kwargs[:currency]
+        recipient = kwargs[:recipient]
+        external_id = kwargs[:external_id]
+        memo = kwargs[:memo]
+        fee_payer = kwargs.fetch(:fee_payer, false)
+        chain_id = kwargs[:chain_id]
+        extra = kwargs[:extra]
+        mppx_scope = kwargs[:mppx_scope]
+
+        resolved_currency = currency || (method.respond_to?(:currency) ? method.currency : nil)
+        resolved_recipient = recipient || (method.respond_to?(:recipient) ? method.recipient : nil)
         raise ArgumentError, "currency must be set on the method or passed to charge()" unless resolved_currency
         raise ArgumentError, "recipient must be set on the method or passed to charge()" unless resolved_recipient
 
-        decimals = @method.respond_to?(:decimals) ? @method.decimals : DEFAULT_DECIMALS
+        decimals = method.respond_to?(:decimals) ? method.decimals : DEFAULT_DECIMALS
         base_amount = Mpp::Units.parse_units(amount, decimals).to_s
 
         request = {
@@ -86,20 +190,20 @@ module Mpp
         request["externalId"] = external_id unless external_id.nil?
 
         if extra
-          extra.each do |k, v|
-            raise ArgumentError, "extra must be a dict[str, str]" unless k.is_a?(String) && v.is_a?(String)
+          extra.each do |key, value|
+            raise ArgumentError, "extra must be a dict[str, str]" unless key.is_a?(String) && value.is_a?(String)
           end
           request["extra"] = extra
         end
         if mppx_scope
-          mppx_scope.each do |k, v|
-            raise ArgumentError, "mppx_scope must be a dict[str, str]" unless k.is_a?(String) && v.is_a?(String)
+          mppx_scope.each do |key, value|
+            raise ArgumentError, "mppx_scope must be a dict[str, str]" unless key.is_a?(String) && value.is_a?(String)
           end
           request["_mppx_scope"] = mppx_scope
         end
 
         resolved_chain_id = chain_id
-        resolved_chain_id ||= @method.chain_id if @method.respond_to?(:chain_id)
+        resolved_chain_id ||= method.chain_id if method.respond_to?(:chain_id)
 
         if memo || fee_payer || !resolved_chain_id.nil?
           method_details = {}
@@ -109,20 +213,45 @@ module Mpp
           request["methodDetails"] = method_details
         end
 
-        request = Mpp::Server::MethodHelper.transform_request(@method, request, nil)
+        Mpp::Server::MethodHelper.transform_request(method, request, nil)
+      end
 
-        Verify.verify_or_challenge(
-          authorization: authorization,
-          intent: intent,
-          request: request,
-          realm: @realm,
-          secret_key: @secret_key,
-          method: @method.name,
-          description: description,
-          expires: expires,
-          events: @events,
-          body: body
-        )
+      # Render a 402 response for one or more challenges.
+      sig { params(challenge: T.untyped).returns(T::Hash[T.untyped, T.untyped]) }
+      def challenge_response(challenge)
+        challenges = challenge.is_a?(Array) ? challenge : [challenge]
+        Decorator.make_challenge_response(challenges, @realm)
+      end
+
+      private
+
+      sig { params(method: T.untyped, methods: T.untyped).returns(T::Array[T.untyped]) }
+      def normalize_methods(method, methods)
+        if !method.nil? && !methods.nil?
+          raise ArgumentError, "pass method: or methods:, not both"
+        end
+
+        list = methods || (method.nil? ? nil : [method])
+        raise ArgumentError, "method: or methods: is required" if list.nil? || list.empty?
+
+        names = list.map(&:name)
+        duplicates = names.tally.select { |_name, count| count > 1 }.keys
+        raise ArgumentError, "duplicate payment method names: #{duplicates.join(", ")}" unless duplicates.empty?
+
+        list
+      end
+
+      sig { params(key: String).returns(T.untyped) }
+      def resolve_method_key(key)
+        name, intent = key.split("/", 2)
+        found = if intent
+          @methods.find { |candidate| candidate.name == name && candidate.intents.key?(intent) }
+        else
+          @methods.find { |candidate| candidate.name == name }
+        end
+        return found if found
+
+        raise ArgumentError, "No handler for #{key.inspect}. Is this method in your methods array?"
       end
     end
   end

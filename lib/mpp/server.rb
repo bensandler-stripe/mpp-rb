@@ -11,5 +11,9 @@ module Mpp
     autoload :MppHandler, "mpp/server/mpp_handler"
     autoload :Decorator, "mpp/server/decorator"
     autoload :Middleware, "mpp/server/middleware"
+    autoload :AcceptPayment, "mpp/server/accept_payment"
+    autoload :ComposedResult, "mpp/server/result"
+    autoload :ComposedHandler, "mpp/server/compose"
+    autoload :ComposeOffer, "mpp/server/compose"
   end
 end
