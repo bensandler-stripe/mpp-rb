@@ -269,7 +269,7 @@ class TestMiddleware < Minitest::Test
   end
 
   def test_compose_handler_returns_multiple_www_authenticate
-    tempo = mock_named_method("tempo", Mpp::Methods::Tempo::Defaults::PATH_USD, format("0x%040d", 1))
+    tempo = mock_named_method("tempo", Mpp::Methods::Tempo::Defaults::PATH_USD, "0x#{"0" * 39}1")
     stripe = mock_named_method("stripe", "usd", "acct_123", decimals: 2)
     handler = Mpp::Server::MppHandler.new(
       methods: [tempo, stripe],

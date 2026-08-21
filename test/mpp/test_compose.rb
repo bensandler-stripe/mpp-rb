@@ -33,7 +33,7 @@ class TestCompose < Minitest::Test
   REALM = "api.example.com"
   TEMPO_CURRENCY = Mpp::Methods::Tempo::Defaults::PATH_USD
   TEMPO_CURRENCY_B = Mpp::Methods::Tempo::Defaults::USDC
-  RECIPIENT = format("0x%040d", 1)
+  RECIPIENT = "0x#{"0" * 39}1"
 
   def setup
     @tempo = ComposeMockMethod.new(name: "tempo", currency: TEMPO_CURRENCY, recipient: RECIPIENT)
