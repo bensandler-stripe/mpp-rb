@@ -22,6 +22,7 @@ module Mpp
   autoload :Events, "mpp/events"
   autoload :Units, "mpp/units"
   autoload :MemoryStore, "mpp/store"
+  autoload :X402, "mpp/x402"
 
   # Server module (autoloaded)
   autoload :Server, "mpp/server"
@@ -33,6 +34,7 @@ module Mpp
   module Methods
     autoload :Tempo, "mpp/methods/tempo"
     autoload :Stripe, "mpp/methods/stripe"
+    autoload :Evm, "mpp/methods/evm"
   end
 
   # Extensions namespace
