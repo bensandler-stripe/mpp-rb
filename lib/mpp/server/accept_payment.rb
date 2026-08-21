@@ -24,7 +24,7 @@ module Mpp
       # Parse an Accept-Payment header. Raises ArgumentError on malformed input.
       sig { params(header: String).returns(T::Array[Entry]) }
       def parse(header)
-        parts = header.split(/\s*,\s*/).map(&:strip).reject(&:empty?)
+        parts = header.split(",").map(&:strip).reject(&:empty?)
         Kernel.raise ArgumentError, "Accept-Payment header is empty." if parts.empty?
 
         parts.each_with_index.map { |part, index| parse_entry(part, index) }
@@ -155,7 +155,7 @@ module Mpp
       def split_parameters(value)
         return [] if value.nil? || value.empty?
 
-        value.split(/\s*;\s*/).reject(&:empty?)
+        value.split(";").map(&:strip).reject(&:empty?)
       end
       private_class_method :split_parameters
 
@@ -165,7 +165,7 @@ module Mpp
           Kernel.raise ArgumentError, "Invalid q-value for #{context}. Expected an HTTP qvalue."
         end
 
-        assert_q(Float(value), context)
+        assert_q(Kernel.Float(value), context)
       end
       private_class_method :parse_header_q
 

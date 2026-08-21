@@ -131,7 +131,7 @@ module Mpp
         end
 
         entries = charge_methods.map { |candidate| [candidate, offer_opts.merge(amount: amount)] }
-        compose(*entries).call(
+        ComposedHandler.from_entries(self, entries).call(
           authorization: authorization,
           payment_signature: request_opts[:payment_signature],
           body: request_opts[:body],

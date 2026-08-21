@@ -134,8 +134,8 @@ module Mpp
       end
 
       # Flatten nested compositions into a single handler.
-      sig { params(handlers: T.untyped).returns(ComposedHandler) }
-      def self.compose(*handlers)
+      sig { params(handlers: T::Array[T.untyped]).returns(ComposedHandler) }
+      def self.compose(handlers)
         Kernel.raise ArgumentError, "compose() requires at least one handler" if handlers.empty?
 
         offers = handlers.flat_map do |value|
@@ -276,7 +276,8 @@ module Mpp
 
       sig { params(payment_signature: String).returns(T.nilable(T::Hash[T.untyped, T.untyped])) }
       def decode_x402_payload(payment_signature)
-        Mpp::X402::Header.decode_payment_signature(payment_signature)
+        x402 = T.unsafe(::Object).const_get("Mpp::X402")
+        x402::Header.decode_payment_signature(payment_signature)
       rescue Mpp::ParseError, ArgumentError, NameError, LoadError
         nil
       end
@@ -357,7 +358,8 @@ module Mpp
         return nil if values.empty?
         return values.first if values.length == 1
 
-        Mpp::X402::Server.merge_payment_required(values)
+        x402 = T.unsafe(::Object).const_get("Mpp::X402")
+        x402::Server.merge_payment_required(values)
       rescue NameError, LoadError
         values.first
       end
@@ -365,7 +367,7 @@ module Mpp
 
     sig { params(handlers: T.untyped).returns(ComposedHandler) }
     def self.compose(*handlers)
-      ComposedHandler.compose(*handlers)
+      ComposedHandler.compose(handlers)
     end
   end
 end
