@@ -14,7 +14,7 @@ class TestX402Header < Minitest::Test
       },
       "maxTimeoutSeconds" => 300,
       "network" => "eip155:84532",
-      "payTo" => format("0x%040d", 1),
+      "payTo" => "0x#{"0" * 39}1",
       "scheme" => "exact"
     }
     @payment_required = {
@@ -38,14 +38,14 @@ class TestX402Header < Minitest::Test
       "accepted" => @requirements,
       "payload" => {
         "authorization" => {
-          "from" => format("0x%040d", 1),
-          "nonce" => "0x#{'ab' * 32}",
+          "from" => "0x#{"0" * 39}1",
+          "nonce" => "0x#{"ab" * 32}",
           "to" => @requirements["payTo"],
           "validAfter" => "0",
           "validBefore" => "9999999999",
           "value" => "10000"
         },
-        "signature" => "0x#{'cd' * 65}"
+        "signature" => "0x#{"cd" * 65}"
       },
       "resource" => {"url" => "https://api.example.com/paid"},
       "x402Version" => 2

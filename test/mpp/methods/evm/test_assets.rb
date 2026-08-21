@@ -22,7 +22,7 @@ class TestEvmAssets < Minitest::Test
   end
 
   def test_resolve_raw_address_requires_metadata
-    raw = format("0x%040d", 3)
+    raw = "0x#{"0" * 39}3"
     assert_raises(ArgumentError) do
       Mpp::Methods::Evm::Assets.resolve(raw)
     end

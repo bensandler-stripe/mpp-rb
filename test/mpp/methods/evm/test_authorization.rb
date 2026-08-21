@@ -36,7 +36,7 @@ class TestEvmAuthorization < Minitest::Test
   def eth_available?
     require "eth"
     true
-  rescue LoadError, Gem::MissingSpecError
+  rescue LoadError
     false
   end
 end
