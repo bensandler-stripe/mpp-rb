@@ -71,6 +71,8 @@ else
 end
 ```
 
+`evm.charge` additionally emits `PAYMENT-REQUIRED` and accepts `PAYMENT-SIGNATURE` (x402 v2 exact) when a facilitator URL is configured.
+
 ### Client
 
 ```ruby
@@ -145,6 +147,7 @@ env["mpp.charge"] = { amount: "0.50", description: "Paid endpoint" }
 | [tempo_charge](./examples/tempo_charge/) | Tempo testnet payments via Sinatra |
 | [stripe_charge](./examples/stripe_charge/) | Stripe payments via Shared Payment Tokens |
 | [compose](./examples/compose/) | Tempo + Stripe on one endpoint |
+| [evm_x402](./examples/evm_x402/) | EVM charge with x402 exact compatibility |
 
 Each example is a standalone Sinatra app with `/free` and `/paid` endpoints. To run one:
 
@@ -166,10 +169,11 @@ npx mppx http://localhost:4567/paid
 |--------|---------------|---------------|
 | Tempo | Yes | Yes |
 | Stripe | Yes | Yes |
+| EVM (`evm.charge`, x402 exact) | No | Yes |
 
-Tempo charge transaction construction is implemented directly in Ruby. Optional dependencies: `eth` (account signing) and `rlp` (fee payer envelope).
+Tempo charge transaction construction is implemented directly in Ruby. Optional dependencies: `eth` (account signing, EIP-3009 recovery) and `rlp` (fee payer envelope).
 
-`Mpp.create` accepts a single `method:` (unchanged) or `methods:` to register several payment methods. `server.compose` presents every method as multiple `WWW-Authenticate` challenges.
+`Mpp.create` accepts a single `method:` (unchanged) or `methods:` to register several payment methods. `server.compose` presents every method as multiple `WWW-Authenticate` challenges; `evm.charge` also emits `PAYMENT-REQUIRED` and accepts `PAYMENT-SIGNATURE` when a facilitator is configured. The Ruby HTTP client does not yet sign EVM or x402 credentials.
 
 ## Protocol
 

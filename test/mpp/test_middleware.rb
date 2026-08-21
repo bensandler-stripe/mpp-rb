@@ -293,6 +293,29 @@ class TestMiddleware < Minitest::Test
     assert_equal 2, www.length
   end
 
+  def test_varies_on_payment_signature_for_x402_success
+    handler = mock_handler
+    pricing = ->(_env) { {amount: "1.00"} }
+    challenge = handler.charge(nil, "1.00", mppx_scope: {"resource" => "/resource"})
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+    app = ->(_env) { [200, {}, ["OK"]] }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler, pricing: pricing)
+
+    _status, headers, _body = middleware.call(
+      minimal_env.merge(
+        "HTTP_AUTHORIZATION" => credential.to_authorization,
+        "HTTP_PAYMENT_SIGNATURE" => "placeholder"
+      )
+    )
+
+    vary_fields = headers.fetch("Vary", "").split(",").map { |field| field.strip.downcase }
+    assert_includes vary_fields, "authorization"
+    assert_includes vary_fields, "payment-signature"
+  end
+
   def minimal_env
     {
       "REQUEST_METHOD" => "GET",
