@@ -52,16 +52,20 @@ end
 ### Multiple methods
 
 ```ruby
-server = Mpp.create(methods: [tempo, stripe])
+server = Mpp.create(methods: [tempo, evm, stripe])
 
 paid = server.compose(
   [tempo, {amount: "0.01"}],
+  [evm, {amount: "0.01"}],
   [stripe, {amount: "0.01", currency: "usd"}]
 )
 
 result = paid.call(
   authorization: env["HTTP_AUTHORIZATION"],
-  accept_payment: env["HTTP_ACCEPT_PAYMENT"]
+  payment_signature: env["HTTP_PAYMENT_SIGNATURE"],
+  accept_payment: env["HTTP_ACCEPT_PAYMENT"],
+  url: request.url,
+  http_method: request.request_method
 )
 
 if result.payment_required?
@@ -146,7 +150,7 @@ env["mpp.charge"] = { amount: "0.50", description: "Paid endpoint" }
 |---------|-------------|
 | [tempo_charge](./examples/tempo_charge/) | Tempo testnet payments via Sinatra |
 | [stripe_charge](./examples/stripe_charge/) | Stripe payments via Shared Payment Tokens |
-| [compose](./examples/compose/) | Tempo + Stripe on one endpoint |
+| [compose](./examples/compose/) | Tempo + Base USDC + Stripe SPTs on one endpoint |
 | [evm_x402](./examples/evm_x402/) | EVM charge with x402 exact compatibility |
 
 Each example is a standalone Sinatra app with `/free` and `/paid` endpoints. To run one:

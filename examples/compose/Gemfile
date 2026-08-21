@@ -5,5 +5,9 @@ gem "dotenv"
 gem "rackup"
 gem "puma"
 gem "sorbet-runtime"
-gem "mpp-rb", path: "../.."
 gem "stripe"
+gem "mpp-rb", path: "../.."
+
+# Optional: EIP-3009 recovery when settling an EVM payment.
+# Needs Homebrew autotools: `brew install autoconf automake libtool`
+# gem "eth"

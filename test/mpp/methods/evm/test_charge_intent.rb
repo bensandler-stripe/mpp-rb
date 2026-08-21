@@ -7,8 +7,8 @@ require "minitest/mock"
 class TestEvmCharge < Minitest::Test
   SECRET = "test-evm-secret"
   REALM = "api.example.com"
-  RECIPIENT = format("0x%040d", 1)
-  PAYER = format("0x%040d", 2)
+  RECIPIENT = "0x#{"0" * 39}1"
+  PAYER = "0x#{"0" * 39}2"
   URL = "https://api.example.com/paid"
   FACILITATOR = "https://x402.example/facilitator"
 
@@ -174,13 +174,13 @@ class TestEvmCharge < Minitest::Test
       "payload" => {
         "authorization" => {
           "from" => PAYER,
-          "nonce" => "0x#{'11' * 32}",
+          "nonce" => "0x#{"11" * 32}",
           "to" => RECIPIENT,
           "validAfter" => "0",
           "validBefore" => (Time.now.to_i + 600).to_s,
           "value" => challenge.request["amount"]
         },
-        "signature" => "0x#{'22' * 65}"
+        "signature" => "0x#{"22" * 65}"
       },
       "resource" => {"url" => resource_url},
       "x402Version" => 2
@@ -209,7 +209,7 @@ class TestEvmCharge < Minitest::Test
     def initialize
       @name = "tempo"
       @currency = Mpp::Methods::Tempo::Defaults::PATH_USD
-      @recipient = format("0x%040d", 1)
+      @recipient = "0x#{"0" * 39}1"
       @decimals = 6
       @intents = {"charge" => Intent.new}
     end

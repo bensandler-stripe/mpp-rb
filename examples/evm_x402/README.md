@@ -11,6 +11,12 @@ bundle install
 bundle exec ruby app.rb
 ```
 
+This example depends on `eth` → `rbsecp256k1`, which compiles libsecp256k1 with autotools. On macOS:
+
+```sh
+brew install autoconf automake libtool
+```
+
 The server starts on `http://localhost:4567`.
 
 ## Endpoints
