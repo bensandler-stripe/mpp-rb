@@ -268,7 +268,30 @@ class TestMiddleware < Minitest::Test
     assert_equal body, seen_body
   end
 
-  private
+  def test_compose_handler_returns_multiple_www_authenticate
+    tempo = mock_named_method("tempo", Mpp::Methods::Tempo::Defaults::PATH_USD, format("0x%040d", 1))
+    stripe = mock_named_method("stripe", "usd", "acct_123", decimals: 2)
+    handler = Mpp::Server::MppHandler.new(
+      methods: [tempo, stripe],
+      realm: @realm,
+      secret_key: @secret_key
+    )
+    composed = handler.compose(
+      [tempo, {amount: "1.00"}],
+      [stripe, {amount: "1.00"}]
+    )
+    middleware = Mpp::Server::Middleware.new(
+      ->(_env) { [200, {}, ["OK"]] },
+      handler: composed,
+      pricing: ->(_env) { {amount: "1.00"} }
+    )
+
+    status, headers, _body = middleware.call(minimal_env)
+
+    assert_equal 402, status
+    www = Array(headers["WWW-Authenticate"])
+    assert_equal 2, www.length
+  end
 
   def minimal_env
     {
@@ -302,6 +325,20 @@ class TestMiddleware < Minitest::Test
       realm: @realm,
       secret_key: @secret_key
     )
+  end
+
+  def mock_named_method(name, currency, recipient, decimals: 6)
+    verify_fn = lambda { |credential, _request|
+      Mpp::Receipt.success("ref-#{credential.challenge.id[0..7]}", method: name)
+    }
+    intent = Mpp::Server::FunctionalIntent.new("charge", &verify_fn)
+    stub_method = Object.new
+    stub_method.define_singleton_method(:name) { name }
+    stub_method.define_singleton_method(:intents) { {"charge" => intent} }
+    stub_method.define_singleton_method(:currency) { currency }
+    stub_method.define_singleton_method(:recipient) { recipient }
+    stub_method.define_singleton_method(:decimals) { decimals }
+    stub_method
   end
 
   class NonRewindableInput

@@ -49,6 +49,28 @@ else
 end
 ```
 
+### Multiple methods
+
+```ruby
+server = Mpp.create(methods: [tempo, stripe])
+
+paid = server.compose(
+  [tempo, {amount: "0.01"}],
+  [stripe, {amount: "0.01", currency: "usd"}]
+)
+
+result = paid.call(
+  authorization: env["HTTP_AUTHORIZATION"],
+  accept_payment: env["HTTP_ACCEPT_PAYMENT"]
+)
+
+if result.payment_required?
+  resp = result.to_response
+else
+  credential, receipt = result.payment
+end
+```
+
 ### Client
 
 ```ruby
@@ -122,6 +144,7 @@ env["mpp.charge"] = { amount: "0.50", description: "Paid endpoint" }
 |---------|-------------|
 | [tempo_charge](./examples/tempo_charge/) | Tempo testnet payments via Sinatra |
 | [stripe_charge](./examples/stripe_charge/) | Stripe payments via Shared Payment Tokens |
+| [compose](./examples/compose/) | Tempo + Stripe on one endpoint |
 
 Each example is a standalone Sinatra app with `/free` and `/paid` endpoints. To run one:
 
@@ -145,6 +168,8 @@ npx mppx http://localhost:4567/paid
 | Stripe | Yes | Yes |
 
 Tempo charge transaction construction is implemented directly in Ruby. Optional dependencies: `eth` (account signing) and `rlp` (fee payer envelope).
+
+`Mpp.create` accepts a single `method:` (unchanged) or `methods:` to register several payment methods. `server.compose` presents every method as multiple `WWW-Authenticate` challenges.
 
 ## Protocol
 

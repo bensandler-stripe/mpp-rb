@@ -22,10 +22,10 @@ module Mpp
     class Middleware
       extend T::Sig
 
-      sig { params(app: T.untyped, handler: Mpp::Server::MppHandler, pricing: T.untyped).void }
+      sig { params(app: T.untyped, handler: T.untyped, pricing: T.untyped).void }
       def initialize(app, handler:, pricing:)
         @app = T.let(app, T.untyped)
-        @handler = T.let(handler, Mpp::Server::MppHandler)
+        @handler = T.let(handler, T.untyped)
         @pricing = T.let(pricing, T.untyped)
       end
 
@@ -35,46 +35,161 @@ module Mpp
         return @app.call(env) unless charge_opts
 
         authorization = env["HTTP_AUTHORIZATION"]
+        payment_signature = env["HTTP_PAYMENT_SIGNATURE"]
+        accept_payment = env["HTTP_ACCEPT_PAYMENT"]
+        http_method = env["REQUEST_METHOD"]
+        url = request_url(env)
         body_capture = capture_request_body(env)
 
         request_body = body_capture&.materialize
         env["rack.input"] = StringIO.new(request_body || "") if body_capture
 
-        amount = charge_opts[:amount]
-        opts = charge_opts.except(:amount, :body)
-        opts[:mppx_scope] ||= mppx_scope(env)
+        result = verify_payment(
+          env,
+          charge_opts,
+          authorization: authorization,
+          payment_signature: payment_signature,
+          accept_payment: accept_payment,
+          http_method: http_method,
+          url: url,
+          request_body: request_body
+        )
 
-        result = @handler.charge(authorization, amount, **opts, body: request_body)
+        challenge_response = challenge_rack_response(result, url: url, http_method: http_method)
+        return challenge_response if challenge_response
 
-        if result.is_a?(Mpp::Challenge)
-          resp = Mpp::Server::Decorator.make_challenge_response(result, @handler.realm)
-          return [resp["status"], resp["headers"], [resp["body"]]]
-        end
-
-        _credential, receipt = result
+        credential, receipt, extra_headers = paid_result(result)
         status, headers, body = @app.call(env)
         headers["Payment-Receipt"] = receipt.to_payment_receipt
-        self.class.mark_authorization_bound_response(headers)
+        extra_headers.each { |key, value| headers[key] = value unless value.nil? }
+        decorate_single_method_receipt(headers, credential, receipt, payment_signature)
+        vary = ["Authorization"]
+        vary << "PAYMENT-SIGNATURE" if x402_bound?(headers, payment_signature)
+        self.class.mark_authorization_bound_response(headers, vary: vary)
 
         [status, headers, body]
       end
 
-      sig { params(headers: T::Hash[T.untyped, T.untyped]).void }
-      def self.mark_authorization_bound_response(headers)
+      sig { params(headers: T::Hash[T.untyped, T.untyped], vary: T::Array[String]).void }
+      def self.mark_authorization_bound_response(headers, vary: ["Authorization"])
         headers["Cache-Control"] = "no-store"
 
         vary_values = headers["Vary"].to_s.split(",").map do |value|
           value.strip.downcase
         end
-        return if vary_values.include?("*") || vary_values.include?("authorization")
+        return if vary_values.include?("*")
 
-        headers["Vary"] = [headers["Vary"], "Authorization"]
+        additions = vary.reject { |field| vary_values.include?(field.downcase) }
+        return if additions.empty?
+
+        headers["Vary"] = [headers["Vary"], *additions]
           .compact
           .reject(&:empty?)
           .join(", ")
       end
 
       private
+
+      sig do
+        params(
+          env: T.untyped,
+          charge_opts: T.untyped,
+          authorization: T.untyped,
+          payment_signature: T.untyped,
+          accept_payment: T.untyped,
+          http_method: T.untyped,
+          url: T.untyped,
+          request_body: T.untyped
+        ).returns(T.untyped)
+      end
+      def verify_payment(env, charge_opts, authorization:, payment_signature:, accept_payment:, http_method:, url:, request_body:)
+        if @handler.is_a?(Mpp::Server::ComposedHandler)
+          return @handler.call(
+            authorization: authorization,
+            payment_signature: payment_signature,
+            body: request_body,
+            url: url,
+            accept_payment: accept_payment,
+            http_method: http_method
+          )
+        end
+
+        amount = charge_opts[:amount]
+        opts = charge_opts.except(:amount, :body)
+        opts[:mppx_scope] ||= mppx_scope(env)
+        @handler.charge(
+          authorization,
+          amount,
+          **opts,
+          body: request_body,
+          payment_signature: payment_signature,
+          url: url,
+          accept_payment: accept_payment,
+          http_method: http_method
+        )
+      end
+
+      sig { params(result: T.untyped, url: T.nilable(String), http_method: T.nilable(String)).returns(T.nilable(T::Array[T.untyped])) }
+      def challenge_rack_response(result, url:, http_method:)
+        if result.is_a?(Mpp::Server::ComposedResult)
+          return nil unless result.payment_required?
+
+          resp = result.to_response
+          return [resp["status"], resp["headers"], [resp["body"]]]
+        end
+
+        return nil unless result.is_a?(Mpp::Challenge)
+
+        resp = if @handler.respond_to?(:challenge_response)
+          @handler.challenge_response(result, url: url, http_method: http_method)
+        else
+          Mpp::Server::Decorator.make_challenge_response(result, @handler.realm)
+        end
+        [resp["status"], resp["headers"], [resp["body"]]]
+      end
+
+      sig { params(result: T.untyped).returns(T::Array[T.untyped]) }
+      def paid_result(result)
+        if result.is_a?(Mpp::Server::ComposedResult)
+          credential, receipt = result.payment
+          return [credential, receipt, result.extra_headers]
+        end
+
+        credential, receipt = result
+        [credential, receipt, {}]
+      end
+
+      sig { params(headers: T::Hash[T.untyped, T.untyped], credential: T.untyped, receipt: T.untyped, payment_signature: T.untyped).void }
+      def decorate_single_method_receipt(headers, credential, receipt, payment_signature)
+        return unless payment_signature
+        return unless @handler.respond_to?(:method)
+        return unless @handler.method.respond_to?(:decorate_receipt)
+
+        @handler.method.decorate_receipt(headers, receipt, credential, payment_signature: payment_signature)
+      end
+
+      sig { params(headers: T::Hash[T.untyped, T.untyped], payment_signature: T.untyped).returns(T::Boolean) }
+      def x402_bound?(headers, payment_signature)
+        !payment_signature.to_s.empty? ||
+          headers.key?("PAYMENT-RESPONSE") ||
+          headers.key?("PAYMENT-REQUIRED")
+      end
+
+      sig { params(env: T.untyped).returns(String) }
+      def request_url(env)
+        scheme = env["HTTP_X_FORWARDED_PROTO"] || env["rack.url_scheme"] || "http"
+        host = env["HTTP_HOST"]
+        unless host
+          server = env["SERVER_NAME"] || "localhost"
+          port = env["SERVER_PORT"]
+          host = (port && !["80", "443"].include?(port.to_s)) ? "#{server}:#{port}" : server
+        end
+        path = "#{env["SCRIPT_NAME"]}#{env["PATH_INFO"]}"
+        query = env["QUERY_STRING"]
+        url = "#{scheme}://#{host}#{path}"
+        url += "?#{query}" if query && !query.empty?
+        url
+      end
 
       sig { params(env: T.untyped).returns(T.nilable(RackInputCapture)) }
       def capture_request_body(env)
