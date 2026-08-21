@@ -58,7 +58,7 @@ module Mpp
         challenge_response = challenge_rack_response(result, url: url, http_method: http_method)
         return challenge_response if challenge_response
 
-        credential, receipt, extra_headers = paid_result(result)
+        _credential, receipt, extra_headers = paid_result(result)
         status, headers, body = @app.call(env)
         headers["Payment-Receipt"] = receipt.to_payment_receipt
         extra_headers.each { |key, value| headers[key] = value unless value.nil? }
