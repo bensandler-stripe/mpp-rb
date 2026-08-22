@@ -137,7 +137,7 @@ class TestStripeChargeIntent < Minitest::Test
       assert_equal ["card", "link"], params[:payment_method_types]
       refute params.key?(:automatic_payment_methods)
       assert_equal({"order" => "123"}, params[:metadata])
-      assert_equal "mpp_test-id", opts[:idempotency_key]
+      assert_equal "mpp_test-id_spt_test123", opts[:idempotency_key]
     end)
 
     receipt = intent_with_payment_intents(payment_intents).verify(credential, request)
@@ -221,6 +221,19 @@ class TestStripeChargeIntent < Minitest::Test
       intent_with_payment_intents(payment_intents).verify(credential, request)
     end
     assert_match(/Card declined/, err.message)
+  end
+
+  def test_verify_scopes_idempotency_key_to_spt
+    request = make_request
+    mock_result = Struct.new(:id, :status).new("pi_abc123", "succeeded")
+    payment_intents = FakePaymentIntents.new(result: mock_result)
+    intent = intent_with_payment_intents(payment_intents)
+
+    intent.verify(make_credential(payload: {"spt" => "spt_first"}), request)
+    intent.verify(make_credential(payload: {"spt" => "spt_second"}), request)
+
+    keys = payment_intents.calls.map { |(_params, opts)| opts[:idempotency_key] }
+    assert_equal ["mpp_test-id_spt_first", "mpp_test-id_spt_second"], keys
   end
 
   def test_verify_rejects_replayed_payment
