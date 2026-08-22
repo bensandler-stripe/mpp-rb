@@ -96,6 +96,22 @@ class TestMiddleware < Minitest::Test
     assert_equal ["OK"], body
   end
 
+  def test_does_not_attach_receipt_when_downstream_returns_500
+    status, headers, body = call_paid(->(_env) { [500, {}, ["boom"]] })
+
+    assert_equal 500, status
+    refute headers.key?("Payment-Receipt")
+    assert_equal ["boom"], body
+  end
+
+  def test_does_not_attach_receipt_when_downstream_returns_403
+    status, headers, body = call_paid(->(_env) { [403, {}, ["denied"]] })
+
+    assert_equal 403, status
+    refute headers.key?("Payment-Receipt")
+    assert_equal ["denied"], body
+  end
+
   def test_rejects_paid_retry_with_different_auto_route_scope
     handler = mock_handler
     pricing = ->(_env) { {amount: "1.00"} }
@@ -328,6 +344,17 @@ class TestMiddleware < Minitest::Test
       field.strip.downcase
     end
     assert_includes vary_fields, "authorization"
+  end
+
+  def call_paid(app, handler: mock_handler)
+    pricing = ->(_env) { {amount: "1.00"} }
+    challenge = handler.charge(nil, "1.00", mppx_scope: {"resource" => "/resource"})
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+    middleware = Mpp::Server::Middleware.new(app, handler: handler, pricing: pricing)
+    middleware.call(minimal_env.merge("HTTP_AUTHORIZATION" => credential.to_authorization))
   end
 
   def mock_handler
