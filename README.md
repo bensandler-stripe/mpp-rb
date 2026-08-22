@@ -175,7 +175,7 @@ npx mppx http://localhost:4567/paid
 | Stripe | Yes | Yes |
 | EVM (`evm.charge`, x402 exact) | No | Yes |
 
-Tempo charge transaction construction is implemented directly in Ruby. Optional dependencies: `eth` (account signing, EIP-3009 recovery) and `rlp` (fee payer envelope).
+Tempo charge transaction construction is implemented directly in Ruby. Runtime dependency: `keccak` (Tempo attribution memos). Optional dependencies: `eth` (account signing, EIP-3009 recovery) and `rlp` (fee payer envelope).
 
 `Mpp.create` accepts a single `method:` (unchanged) or `methods:` to register several payment methods. `server.compose` presents every method as multiple `WWW-Authenticate` challenges; `evm.charge` also emits `PAYMENT-REQUIRED` and accepts `PAYMENT-SIGNATURE` when a facilitator is configured. The Ruby HTTP client does not yet sign EVM or x402 credentials.
 

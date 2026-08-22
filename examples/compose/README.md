@@ -29,7 +29,7 @@ Then:
 bundle exec ruby app.rb
 ```
 
-The server starts on `http://localhost:4567`. Issuing the three challenges does not need the `eth` gem. Settling an EVM payment does (EIP-3009 recovery). If you add `gem "eth"` and `bundle install` fails on `rbsecp256k1` / `aclocal`, install autotools first:
+The server starts on `http://localhost:4567`. Issuing the three challenges and verifying Tempo attribution memos do not need the `eth` gem (`keccak` comes in via mpp-rb). Settling an EVM payment does (EIP-3009 recovery). If you add `gem "eth"` and `bundle install` fails on `rbsecp256k1` / `aclocal`, install autotools first:
 
 ```sh
 brew install autoconf automake libtool

@@ -1,7 +1,7 @@
 # typed: false
 # frozen_string_literal: true
 
-require "openssl"
+require "digest/keccak"
 require "securerandom"
 
 module Mpp
@@ -13,15 +13,9 @@ module Mpp
 
         module_function
 
-        # Compute keccak256 hash. Uses OpenSSL if available, otherwise pure Ruby.
+        # Ethereum Keccak-256. SHA3-256 is not a substitute (different padding).
         def keccak256(data)
-          # Try eth gem's keccak first
-          Kernel.require "eth"
-          Eth::Util.keccak256(data)
-        rescue LoadError
-          # Fallback: use OpenSSL's SHA3-256 (not exactly keccak, but close)
-          # For production, the eth gem should be installed
-          OpenSSL::Digest.new("SHA3-256").digest(data)
+          Digest::Keccak.digest(data, 256)
         end
 
         # Compute TAG = keccak256("mpp")[0:4]

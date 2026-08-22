@@ -3,6 +3,7 @@ PATH
   specs:
     mpp-rb (0.1.4)
       base64 (~> 0.3)
+      keccak (~> 1.3)
 
 GEM
   remote: https://rubygems.org/
