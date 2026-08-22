@@ -12,7 +12,7 @@ module Mpp
     #
     # `resolve` accepts:
     #   * a URL string (public / unauthenticated facilitator)
-    #   * a config hash (`url:` plus optional `token:`, `headers:`, `create_auth_headers:`)
+    #   * a config hash (`url:` plus optional `headers:` as a Hash or per-request proc)
     #   * any object that responds to `#verify` and `#settle` (e.g. a CDP HTTPFacilitatorClient)
     class Facilitator
       extend T::Sig
@@ -23,21 +23,16 @@ module Mpp
       sig {
         params(
           url: String,
-          headers: T.nilable(T::Hash[T.untyped, T.untyped]),
-          token: T.nilable(String),
-          create_auth_headers: T.untyped
+          headers: T.untyped
         ).void
       }
-      def initialize(url, headers: nil, token: nil, create_auth_headers: nil)
+      def initialize(url, headers: nil)
         base = url.to_s
         base = base.chomp("/") while base.end_with?("/")
         @base_url = T.let(base, String)
         Kernel.raise ArgumentError, "x402 exact requires `facilitator`." if @base_url.empty?
 
-        extra = stringify_headers(headers)
-        extra["Authorization"] = "Bearer #{token}" if token && !token.to_s.empty?
-        @headers = T.let(extra, T::Hash[String, String])
-        @create_auth_headers = T.let(create_auth_headers, T.untyped)
+        @headers = T.let(headers, T.untyped)
       end
 
       sig { params(facilitator: T.untyped).returns(T.untyped) }
@@ -54,16 +49,8 @@ module Mpp
       def self.from_config(config)
         cfg = symbolize(config)
         url = cfg[:url] || cfg[:base_url] || cfg[:baseUrl]
-        token = cfg[:token] || cfg[:bearer] || cfg[:bearer_token] || cfg[:bearerToken]
-        headers = cfg[:headers]
-        create_auth_headers = cfg[:create_auth_headers] || cfg[:createAuthHeaders]
 
-        new(
-          url.to_s,
-          headers: headers,
-          token: token&.to_s,
-          create_auth_headers: create_auth_headers
-        )
+        new(url.to_s, headers: cfg[:headers])
       end
 
       sig { params(facilitator: T.untyped).returns(T::Boolean) }
@@ -112,20 +99,18 @@ module Mpp
 
       sig { params(path: String).returns(T::Hash[String, String]) }
       def request_headers(path)
-        stringify_headers(@headers).merge(auth_headers_for(path))
-      end
+        source = @headers
+        return {} if source.nil?
 
-      sig { params(path: String).returns(T::Hash[String, String]) }
-      def auth_headers_for(path)
-        return {} if @create_auth_headers.nil?
-
-        arity = @create_auth_headers.respond_to?(:arity) ? @create_auth_headers.arity : 1
-        generated = (arity == 0) ? @create_auth_headers.call : @create_auth_headers.call(path)
-        return {} unless generated.is_a?(Hash)
+        if source.respond_to?(:call)
+          arity = source.respond_to?(:arity) ? source.arity : 1
+          source = (arity == 0) ? source.call : source.call(path)
+        end
+        return {} unless source.is_a?(Hash)
 
         operation = path.delete_prefix("/")
-        keyed = generated[operation] || generated[operation.to_sym]
-        stringify_headers(keyed.is_a?(Hash) ? keyed : generated)
+        keyed = source[operation] || source[operation.to_sym]
+        stringify_headers(keyed.is_a?(Hash) ? keyed : source)
       end
 
       sig do

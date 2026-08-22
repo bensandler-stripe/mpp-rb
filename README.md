@@ -81,13 +81,13 @@ end
 # Public / testnet facilitator
 x402: {facilitator: "https://x402.org/facilitator"}
 
-# Stripe-hosted facilitator (bearer token)
-x402: {facilitator: {url: ENV["X402_FACILITATOR_URL"], token: ENV["X402_FACILITATOR_TOKEN"]}}
+# Per-request headers (bearer token, CDP JWT, etc.)
+x402: {facilitator: {url: facilitator_url, headers: -> { {"Authorization" => "Bearer #{token}"} }}}
 
-# Per-request auth (Coinbase CDP JWT, etc.)
-x402: {facilitator: {url: cdp_url, create_auth_headers: ->(path) { cdp_jwt_headers(path) }}}
+# The proc may take the request path (`/verify`, `/settle`) when headers differ per call
+x402: {facilitator: {url: cdp_url, headers: ->(path) { cdp_headers(path) }}}
 
-# Any client with #verify / #settle (e.g. HTTPFacilitatorClient)
+# Any client with #verify / #settle
 x402: {facilitator: cdp_client}
 ```
 

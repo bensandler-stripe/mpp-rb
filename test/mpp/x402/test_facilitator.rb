@@ -55,20 +55,6 @@ class TestX402Facilitator < Minitest::Test
     @facilitator.verify(@payload, @requirements)
   end
 
-  def test_token_config_sends_bearer_authorization
-    facilitator = Mpp::X402::Facilitator.resolve({
-      url: "https://facilitator.stripe.example",
-      token: "sk_facilitator_test"
-    })
-    stub_request(:post, "https://facilitator.stripe.example/verify")
-      .with(headers: {"Authorization" => "Bearer sk_facilitator_test"})
-      .to_return(status: 200, body: {isValid: true}.to_json)
-
-    facilitator.verify(@payload, @requirements)
-    assert_requested :post, "https://facilitator.stripe.example/verify",
-      headers: {"Authorization" => "Bearer sk_facilitator_test"}
-  end
-
   def test_static_headers_are_sent
     facilitator = Mpp::X402::Facilitator.new(
       "https://facilitator.example",
@@ -81,11 +67,25 @@ class TestX402Facilitator < Minitest::Test
     facilitator.settle(@payload, @requirements)
   end
 
-  def test_create_auth_headers_receives_path
+  def test_header_proc_sends_bearer_authorization
+    facilitator = Mpp::X402::Facilitator.resolve({
+      url: "https://facilitator.example",
+      headers: -> { {"Authorization" => "Bearer tok_123"} }
+    })
+    stub_request(:post, "https://facilitator.example/verify")
+      .with(headers: {"Authorization" => "Bearer tok_123"})
+      .to_return(status: 200, body: {isValid: true}.to_json)
+
+    facilitator.verify(@payload, @requirements)
+    assert_requested :post, "https://facilitator.example/verify",
+      headers: {"Authorization" => "Bearer tok_123"}
+  end
+
+  def test_header_proc_receives_path
     paths = []
     facilitator = Mpp::X402::Facilitator.new(
       "https://facilitator.example",
-      create_auth_headers: ->(path) {
+      headers: ->(path) {
         paths << path
         {"Authorization" => "Bearer jwt-for-#{path.delete_prefix("/")}"}
       }
@@ -103,10 +103,10 @@ class TestX402Facilitator < Minitest::Test
     assert_equal ["/verify", "/settle"], paths
   end
 
-  def test_create_auth_headers_cdp_nested_shape
+  def test_header_proc_nested_verify_settle_shape
     facilitator = Mpp::X402::Facilitator.new(
       "https://facilitator.example",
-      create_auth_headers: ->(_path) {
+      headers: -> {
         {
           "verify" => {"Authorization" => "Bearer verify-jwt"},
           "settle" => {"Authorization" => "Bearer settle-jwt"}
@@ -138,15 +138,20 @@ class TestX402Facilitator < Minitest::Test
     assert_same client, method.intents.fetch("charge").facilitator
   end
 
-  def test_evm_charge_accepts_token_config
+  def test_evm_charge_accepts_header_proc
     method = Mpp::Methods::Evm.charge(
       currency: Mpp::Methods::Evm::Assets::BASE_SEPOLIA_USDC,
       recipient: "0x#{"0" * 39}1",
-      x402: {facilitator: {url: "https://facilitator.stripe.example", token: "tok_123"}}
+      x402: {
+        facilitator: {
+          url: "https://facilitator.example",
+          headers: -> { {"Authorization" => "Bearer tok_123"} }
+        }
+      }
     )
     facilitator = method.intents.fetch("charge").facilitator
 
-    stub_request(:post, "https://facilitator.stripe.example/verify")
+    stub_request(:post, "https://facilitator.example/verify")
       .with(headers: {"Authorization" => "Bearer tok_123"})
       .to_return(status: 200, body: {isValid: true}.to_json)
 
@@ -185,7 +190,7 @@ class TestX402Facilitator < Minitest::Test
 
   def test_config_requires_url
     error = assert_raises(ArgumentError) do
-      Mpp::X402::Facilitator.resolve({token: "tok_123"})
+      Mpp::X402::Facilitator.resolve({headers: {"Authorization" => "Bearer tok_123"}})
     end
     assert_match(/facilitator/, error.message)
   end
