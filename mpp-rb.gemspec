@@ -16,11 +16,12 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.add_dependency "base64", "~> 0.3"
+  spec.add_dependency "keccak", "~> 1.3"
 
-  # All runtime deps are stdlib (openssl, base64, json, bigdecimal, time, uri)
+  # keccak is Ethereum Keccak-256 (not SHA3-256) for Tempo attribution memos.
   # Optional deps are autoloaded:
   #   async, async-http  — client + Tempo RPC
-  #   eth                — Tempo account signing
+  #   eth                — Tempo account signing, EIP-3009 recovery
   #   rlp                — fee payer envelope
 
   spec.metadata["rubygems_mfa_required"] = "true"
