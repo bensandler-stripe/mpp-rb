@@ -19,6 +19,7 @@ The server starts on `http://localhost:4567`.
 | Endpoint | Price |
 |----------|-------|
 | `GET /free` | Free |
+| `GET /proof` | $0 (EIP-712 wallet proof) |
 | `GET /paid` | $0.01 |
 
 ## Testing with mppx
@@ -27,6 +28,12 @@ The server starts on `http://localhost:4567`.
 
 ```sh
 npx mppx http://localhost:4567/paid
+```
+
+For the zero-amount proof endpoint, mppx signs an EIP-712 proof instead of a transfer. Use a raw EOA key (delegated Tempo access keys are not accepted by mpp-rb):
+
+```sh
+npx mppx http://localhost:4567/proof
 ```
 
 `mppx` will:
@@ -40,4 +47,5 @@ To see the raw 402 challenge:
 
 ```sh
 curl -i http://localhost:4567/paid
+curl -i http://localhost:4567/proof
 ```
