@@ -14,6 +14,8 @@ module Mpp
     #
     # Payment is verified BEFORE the downstream app runs — if verification
     # fails, the app never executes and a 402 challenge is returned.
+    # Payment-Receipt is attached only when the app then returns 2xx, so a
+    # failed fulfillment is not reported as a successful paid response.
     #
     # Example:
     #   use Mpp::Server::Middleware,
@@ -60,9 +62,11 @@ module Mpp
 
         credential, receipt, extra_headers = paid_result(result)
         status, headers, body = @app.call(env)
-        headers["Payment-Receipt"] = receipt.to_payment_receipt
-        extra_headers.each { |key, value| headers[key] = value unless value.nil? }
-        decorate_single_method_receipt(headers, credential, receipt, payment_signature)
+        if success_status?(status)
+          headers["Payment-Receipt"] = receipt.to_payment_receipt
+          extra_headers.each { |key, value| headers[key] = value unless value.nil? }
+          decorate_single_method_receipt(headers, credential, receipt, payment_signature)
+        end
         vary = ["Authorization"]
         vary << "PAYMENT-SIGNATURE" if x402_bound?(headers, payment_signature)
         self.class.mark_authorization_bound_response(headers, vary: vary)
@@ -146,6 +150,14 @@ module Mpp
           Mpp::Server::Decorator.make_challenge_response(result, @handler.realm)
         end
         [resp["status"], resp["headers"], [resp["body"]]]
+      end
+
+      sig { params(status: T.untyped).returns(T::Boolean) }
+      def success_status?(status)
+        code = Integer(status)
+        (code >= 200) && (code < 300)
+      rescue ArgumentError, TypeError
+        false
       end
 
       sig { params(result: T.untyped).returns(T::Array[T.untyped]) }
