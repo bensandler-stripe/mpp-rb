@@ -106,8 +106,11 @@ module Mpp
 
         private
 
+        # Include the SPT so a retry with a fresh token is a new PaymentIntent,
+        # matching mppx (`prefix_challengeId_spt`). Same challenge + same SPT
+        # still collapses via Stripe idempotency.
         def stripe_idempotency_key(credential)
-          "mpp_#{credential.challenge.id}"
+          "mpp_#{credential.challenge.id}_#{credential.payload["spt"]}"
         end
       end
     end
