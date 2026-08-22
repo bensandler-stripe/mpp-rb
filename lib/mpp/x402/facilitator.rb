@@ -152,7 +152,7 @@ module Mpp
           Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned HTTP #{response.code}")
         end
 
-        parsed = JSON.parse(response.body)
+        parsed = JSON.parse(T.must(response.body))
         Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned HTTP #{response.code}") unless parsed.is_a?(Hash)
 
         parsed
