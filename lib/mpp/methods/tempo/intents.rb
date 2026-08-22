@@ -141,14 +141,13 @@ module Mpp
           simulate_payload = nil
 
           if request.method_details.fee_payer
-            if fee_payer
+            payer = fee_payer
+            raise Mpp::VerificationError, "No fee payer configured" unless payer
+
+            if local_fee_payer?(payer)
               raw_tx, simulate_payload = cosign_as_fee_payer(raw_tx, request.currency, request: request, challenge: credential.challenge)
             else
-              fee_payer_url = request.method_details.fee_payer_url || Defaults::DEFAULT_FEE_PAYER_URL
-              result = Rpc.call(fee_payer_url, "eth_signRawTransaction", [raw_tx])
-              raise Mpp::VerificationError, "Fee payer returned no signed transaction" unless result
-
-              raw_tx = result
+              raw_tx = payer.cosign(raw_tx)
             end
           end
 
@@ -456,6 +455,10 @@ module Mpp
           end
 
           Mpp::Receipt.success(credential.challenge.id)
+        end
+
+        def local_fee_payer?(payer)
+          !FeePayerClient.hosted_config?(payer)
         end
 
         def cosign_as_fee_payer(raw_tx, fee_token, request: nil, challenge: nil)

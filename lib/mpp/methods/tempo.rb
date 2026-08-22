@@ -11,6 +11,7 @@ module Mpp
       autoload :Rpc, "mpp/methods/tempo/rpc"
       autoload :Transaction, "mpp/methods/tempo/transaction"
       autoload :FeePayerPolicy, "mpp/methods/tempo/fee_payer_policy"
+      autoload :FeePayerClient, "mpp/methods/tempo/fee_payer_client"
       autoload :Schemas, "mpp/methods/tempo/schemas"
       # Eagerly require client_method so the Tempo.tempo factory method is available
       require_relative "tempo/client_method"

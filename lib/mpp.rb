@@ -22,6 +22,7 @@ module Mpp
   autoload :Events, "mpp/events"
   autoload :Units, "mpp/units"
   autoload :MemoryStore, "mpp/store"
+  autoload :Http, "mpp/http"
   autoload :X402, "mpp/x402"
 
   # Server module (autoloaded)

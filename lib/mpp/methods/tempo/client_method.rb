@@ -253,9 +253,15 @@ module Mpp
         rpc_url ||= chain_id ? Defaults.rpc_url_for_chain(chain_id) : Defaults::RPC_URL
         currency ||= Defaults.default_currency_for_chain(chain_id)
 
+        if fee_payer == true
+          raise ArgumentError, "fee_payer: true requires account:" unless account
+
+          fee_payer = account
+        end
+
         method = TempoMethod.new(
           account: account,
-          fee_payer: fee_payer,
+          fee_payer: FeePayerClient.resolve_optional(fee_payer),
           rpc_url: rpc_url,
           chain_id: chain_id,
           root_account: root_account,
