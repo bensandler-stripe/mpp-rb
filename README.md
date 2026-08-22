@@ -75,7 +75,21 @@ else
 end
 ```
 
-`evm.charge` additionally emits `PAYMENT-REQUIRED` and accepts `PAYMENT-SIGNATURE` (x402 v2 exact) when a facilitator URL is configured.
+`evm.charge` additionally emits `PAYMENT-REQUIRED` and accepts `PAYMENT-SIGNATURE` (x402 v2 exact) when a facilitator is configured:
+
+```ruby
+# Public / testnet facilitator
+x402: {facilitator: "https://x402.org/facilitator"}
+
+# Stripe-hosted facilitator (bearer token)
+x402: {facilitator: {url: ENV["X402_FACILITATOR_URL"], token: ENV["X402_FACILITATOR_TOKEN"]}}
+
+# Per-request auth (Coinbase CDP JWT, etc.)
+x402: {facilitator: {url: cdp_url, create_auth_headers: ->(path) { cdp_jwt_headers(path) }}}
+
+# Any client with #verify / #settle (e.g. HTTPFacilitatorClient)
+x402: {facilitator: cdp_client}
+```
 
 ### Client
 

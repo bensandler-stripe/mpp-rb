@@ -43,7 +43,9 @@ module Mpp
           acc[key.to_sym] = value
         end
         facilitator = options[:facilitator]
-        raise ArgumentError, "evm.charge requires x402: { facilitator: ... }" if facilitator.nil? || facilitator.to_s.empty?
+        if facilitator.nil? || (facilitator.is_a?(String) && facilitator.empty?)
+          raise ArgumentError, "evm.charge requires x402: { facilitator: ... }"
+        end
 
         route_binding = (options[:route_binding] || options[:routeBinding] || :resource).to_sym
         unless [:resource, :required].include?(route_binding)
