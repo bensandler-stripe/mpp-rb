@@ -28,6 +28,38 @@ class TestTempoRelay < Minitest::Test
     }
   end
 
+  def test_validate_decodes_base64_request_into_an_object
+    request = {
+      "amount" => "10000",
+      "currency" => "0x#{"20c0" + ("0" * 36)}",
+      "methodDetails" => {"chainId" => 42_431}
+    }
+    credential = Mpp::Credential.new(
+      challenge: Mpp::ChallengeEcho.new(
+        id: "challenge-123",
+        realm: "api.example.com",
+        method: "tempo",
+        intent: "charge",
+        request: Mpp::Parsing.b64_encode(request),
+        expires: "2099-01-01T00:00:00.000Z"
+      ),
+      payload: {"type" => "transaction", "signature" => "0xabcdef1234567890"}
+    )
+    relay = Mpp::Methods::Tempo::Relay.new("https://api.tempo.example")
+    stub_request(:post, "https://api.tempo.example/v1/mpp/validate")
+      .with { |http|
+        body = JSON.parse(http.body)
+        body.dig("challenge", "request") == request
+      }
+      .to_return(status: 200, body: {success: true}.to_json)
+    stub_request(:post, "https://api.tempo.example/v1/mpp/broadcast")
+      .to_return(status: 200, body: @receipt_body.to_json)
+
+    relay.verify(credential, {})
+
+    assert_requested :post, "https://api.tempo.example/v1/mpp/validate"
+  end
+
   def test_validate_and_broadcast_post_expected_body
     relay = Mpp::Methods::Tempo::Relay.resolve({
       url: "https://api.tempo.example",
