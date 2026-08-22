@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require_relative "types"
+require_relative "../http/headers"
 require "json"
 require "net/http"
 require "uri"
@@ -27,9 +28,7 @@ module Mpp
         ).void
       }
       def initialize(url, headers: nil)
-        base = url.to_s
-        base = base.chomp("/") while base.end_with?("/")
-        @base_url = T.let(base, String)
+        @base_url = T.let(Mpp::Http::Headers.normalize_base_url(url), String)
         Kernel.raise ArgumentError, "x402 exact requires `facilitator`." if @base_url.empty?
 
         @headers = T.let(headers, T.untyped)
@@ -47,7 +46,7 @@ module Mpp
 
       sig { params(config: T::Hash[T.untyped, T.untyped]).returns(Facilitator) }
       def self.from_config(config)
-        cfg = symbolize(config)
+        cfg = Mpp::Http::Headers.symbolize(config)
         url = cfg[:url] || cfg[:base_url] || cfg[:baseUrl]
 
         new(url.to_s, headers: cfg[:headers])
@@ -80,37 +79,9 @@ module Mpp
 
       private
 
-      sig { params(config: T::Hash[T.untyped, T.untyped]).returns(T::Hash[Symbol, T.untyped]) }
-      def self.symbolize(config)
-        config.each_with_object({}) do |(key, value), acc|
-          acc[key.to_sym] = value
-        end
-      end
-      private_class_method :symbolize
-
-      sig { params(headers: T.nilable(T::Hash[T.untyped, T.untyped])).returns(T::Hash[String, String]) }
-      def stringify_headers(headers)
-        return {} if headers.nil?
-
-        headers.each_with_object({}) do |(key, value), acc|
-          acc[key.to_s] = value.to_s
-        end
-      end
-
       sig { params(path: String).returns(T::Hash[String, String]) }
       def request_headers(path)
-        source = @headers
-        return {} if source.nil?
-
-        if source.respond_to?(:call)
-          arity = source.respond_to?(:arity) ? source.arity : 1
-          source = (arity == 0) ? source.call : source.call(path)
-        end
-        return {} unless source.is_a?(Hash)
-
-        operation = path.delete_prefix("/")
-        keyed = source[operation] || source[operation.to_sym]
-        stringify_headers(keyed.is_a?(Hash) ? keyed : source)
+        Mpp::Http::Headers.resolve(@headers, path)
       end
 
       sig do

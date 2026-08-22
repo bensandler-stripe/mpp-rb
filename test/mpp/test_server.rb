@@ -15,15 +15,16 @@ class MockIntent
 end
 
 class MockMethod
-  attr_reader :name, :intents, :currency, :recipient, :decimals, :chain_id
+  attr_reader :name, :intents, :currency, :recipient, :decimals, :chain_id, :fee_payer
 
-  def initialize(intents: {}, currency: nil, recipient: nil, decimals: 6, chain_id: nil)
+  def initialize(intents: {}, currency: nil, recipient: nil, decimals: 6, chain_id: nil, fee_payer: nil)
     @name = "tempo"
     @intents = intents
     @currency = currency
     @recipient = recipient
     @decimals = decimals
     @chain_id = chain_id
+    @fee_payer = fee_payer
   end
 end
 
@@ -403,6 +404,46 @@ class TestMppHandler < Minitest::Test
     assert_instance_of Mpp::Challenge, result
     assert result.request.dig("methodDetails", "feePayer")
     assert_equal 42_431, result.request.dig("methodDetails", "chainId")
+  end
+
+  def test_charge_auto_advertises_method_fee_payer
+    intent = MockIntent.new
+    method = MockMethod.new(
+      intents: {"charge" => intent},
+      currency: Mpp::Methods::Tempo::Defaults::PATH_USD,
+      recipient: "0x#{"0" * 39}1",
+      fee_payer: Object.new
+    )
+    handler = Mpp::Server::MppHandler.new(
+      method: method,
+      realm: "api.example.com",
+      secret_key: "test-secret"
+    )
+
+    result = handler.charge(nil, "1.00", chain_id: 42_431)
+
+    assert_instance_of Mpp::Challenge, result
+    assert result.request.dig("methodDetails", "feePayer")
+  end
+
+  def test_charge_can_disable_method_fee_payer
+    intent = MockIntent.new
+    method = MockMethod.new(
+      intents: {"charge" => intent},
+      currency: Mpp::Methods::Tempo::Defaults::PATH_USD,
+      recipient: "0x#{"0" * 39}1",
+      fee_payer: Object.new
+    )
+    handler = Mpp::Server::MppHandler.new(
+      method: method,
+      realm: "api.example.com",
+      secret_key: "test-secret"
+    )
+
+    result = handler.charge(nil, "1.00", fee_payer: false, chain_id: 42_431)
+
+    assert_instance_of Mpp::Challenge, result
+    refute result.request.dig("methodDetails", "feePayer")
   end
 
   def test_charge_binds_external_id

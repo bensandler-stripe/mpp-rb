@@ -188,7 +188,11 @@ module Mpp
         recipient = kwargs[:recipient]
         external_id = kwargs[:external_id]
         memo = kwargs[:memo]
-        fee_payer = kwargs.fetch(:fee_payer, false)
+        fee_payer = if kwargs.key?(:fee_payer)
+          kwargs[:fee_payer]
+        else
+          method.respond_to?(:fee_payer) && method.fee_payer
+        end
         chain_id = kwargs[:chain_id]
         extra = kwargs[:extra]
         mppx_scope = kwargs[:mppx_scope]
