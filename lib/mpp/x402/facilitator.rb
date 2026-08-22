@@ -29,7 +29,9 @@ module Mpp
         ).void
       }
       def initialize(url, headers: nil, token: nil, create_auth_headers: nil)
-        @base_url = T.let(url.to_s.sub(%r{/+\z}, ""), String)
+        base = url.to_s
+        base = base.chomp("/") while base.end_with?("/")
+        @base_url = T.let(base, String)
         Kernel.raise ArgumentError, "x402 exact requires `facilitator`." if @base_url.empty?
 
         extra = stringify_headers(headers)

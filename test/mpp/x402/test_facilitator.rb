@@ -39,7 +39,7 @@ class TestX402Facilitator < Minitest::Test
   end
 
   def test_strips_trailing_slash
-    facilitator = Mpp::X402::Facilitator.new("https://facilitator.example/")
+    facilitator = Mpp::X402::Facilitator.new("https://facilitator.example///")
     stub_request(:post, "https://facilitator.example/verify")
       .to_return(status: 200, body: {isValid: true}.to_json)
 
