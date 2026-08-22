@@ -17,6 +17,9 @@ module Mpp
     sig { returns(T.nilable(String)) }
     def external_id; end
 
+    sig { returns(T.nilable(String)) }
+    def subscription_id; end
+
     sig { returns(T.nilable(T::Hash[String, T.untyped])) }
     def extra; end
 
@@ -27,10 +30,11 @@ module Mpp
         reference: String,
         method: String,
         external_id: T.nilable(String),
-        extra: T.nilable(T::Hash[String, T.untyped])
+        extra: T.nilable(T::Hash[String, T.untyped]),
+        subscription_id: T.nilable(String)
       ).void
     end
-    def initialize(status:, timestamp:, reference:, method: "", external_id: nil, extra: nil); end
+    def initialize(status:, timestamp:, reference:, method: "", external_id: nil, extra: nil, subscription_id: nil); end
 
     sig { params(header: String).returns(Receipt) }
     def self.from_payment_receipt(header); end
@@ -44,9 +48,10 @@ module Mpp
         timestamp: T.nilable(Time),
         method: String,
         external_id: T.nilable(String),
-        extra: T.nilable(T::Hash[String, T.untyped])
+        extra: T.nilable(T::Hash[String, T.untyped]),
+        subscription_id: T.nilable(String)
       ).returns(Receipt)
     end
-    def self.success(reference, timestamp: nil, method: "tempo", external_id: nil, extra: nil); end
+    def self.success(reference, timestamp: nil, method: "tempo", external_id: nil, extra: nil, subscription_id: nil); end
   end
 end
