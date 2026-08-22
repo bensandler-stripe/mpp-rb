@@ -9,23 +9,53 @@ require "uri"
 module Mpp
   module X402
     # HTTP client for an x402 facilitator `/verify` and `/settle` API.
+    #
+    # `resolve` accepts:
+    #   * a URL string (public / unauthenticated facilitator)
+    #   * a config hash (`url:` plus optional `headers:` as a Hash or per-request proc)
+    #   * any object that responds to `#verify` and `#settle` (e.g. a CDP HTTPFacilitatorClient)
     class Facilitator
       extend T::Sig
 
       sig { returns(String) }
       attr_reader :base_url
 
-      sig { params(url: String).void }
-      def initialize(url)
-        @base_url = T.let(url.sub(%r{/+\z}, ""), String)
+      sig {
+        params(
+          url: String,
+          headers: T.untyped
+        ).void
+      }
+      def initialize(url, headers: nil)
+        base = url.to_s
+        base = base.chomp("/") while base.end_with?("/")
+        @base_url = T.let(base, String)
+        Kernel.raise ArgumentError, "x402 exact requires `facilitator`." if @base_url.empty?
+
+        @headers = T.let(headers, T.untyped)
       end
 
-      sig { params(facilitator: T.untyped).returns(Facilitator) }
+      sig { params(facilitator: T.untyped).returns(T.untyped) }
       def self.resolve(facilitator)
         return facilitator if facilitator.is_a?(Facilitator)
         return new(facilitator) if facilitator.is_a?(String) && !facilitator.empty?
+        return from_config(facilitator) if facilitator.is_a?(Hash)
+        return facilitator if duck_type?(facilitator)
 
         Kernel.raise ArgumentError, "x402 exact requires `facilitator`."
+      end
+
+      sig { params(config: T::Hash[T.untyped, T.untyped]).returns(Facilitator) }
+      def self.from_config(config)
+        cfg = symbolize(config)
+        url = cfg[:url] || cfg[:base_url] || cfg[:baseUrl]
+
+        new(url.to_s, headers: cfg[:headers])
+      end
+
+      sig { params(facilitator: T.untyped).returns(T::Boolean) }
+      def self.duck_type?(facilitator)
+        !facilitator.nil? && facilitator.respond_to?(:verify) && facilitator.respond_to?(:settle)
       end
 
       sig do
@@ -50,6 +80,39 @@ module Mpp
 
       private
 
+      sig { params(config: T::Hash[T.untyped, T.untyped]).returns(T::Hash[Symbol, T.untyped]) }
+      def self.symbolize(config)
+        config.each_with_object({}) do |(key, value), acc|
+          acc[key.to_sym] = value
+        end
+      end
+      private_class_method :symbolize
+
+      sig { params(headers: T.nilable(T::Hash[T.untyped, T.untyped])).returns(T::Hash[String, String]) }
+      def stringify_headers(headers)
+        return {} if headers.nil?
+
+        headers.each_with_object({}) do |(key, value), acc|
+          acc[key.to_s] = value.to_s
+        end
+      end
+
+      sig { params(path: String).returns(T::Hash[String, String]) }
+      def request_headers(path)
+        source = @headers
+        return {} if source.nil?
+
+        if source.respond_to?(:call)
+          arity = source.respond_to?(:arity) ? source.arity : 1
+          source = (arity == 0) ? source.call : source.call(path)
+        end
+        return {} unless source.is_a?(Hash)
+
+        operation = path.delete_prefix("/")
+        keyed = source[operation] || source[operation.to_sym]
+        stringify_headers(keyed.is_a?(Hash) ? keyed : source)
+      end
+
       sig do
         params(
           path: String,
@@ -63,14 +126,26 @@ module Mpp
         http.use_ssl = uri.scheme == "https"
         request = Net::HTTP::Post.new(uri)
         request["Content-Type"] = "application/json"
+        request_headers(path).each { |key, value| request[key] = value }
         request.body = JSON.generate({
           "paymentPayload" => payment_payload,
           "paymentRequirements" => payment_requirements,
           "x402Version" => VERSION
         })
         response = http.request(request)
-        parsed = JSON.parse(response.body)
-        Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned HTTP #{response.code}") unless parsed.is_a?(Hash)
+        unless response.is_a?(Net::HTTPSuccess)
+          Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned HTTP #{response.code}")
+        end
+
+        body = response.body.to_s
+        if body.empty?
+          Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned an empty body")
+        end
+
+        parsed = JSON.parse(body)
+        unless parsed.is_a?(Hash)
+          Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned JSON that is not an object")
+        end
 
         parsed
       rescue JSON::ParserError

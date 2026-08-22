@@ -75,7 +75,21 @@ else
 end
 ```
 
-`evm.charge` additionally emits `PAYMENT-REQUIRED` and accepts `PAYMENT-SIGNATURE` (x402 v2 exact) when a facilitator URL is configured.
+`evm.charge` additionally emits `PAYMENT-REQUIRED` and accepts `PAYMENT-SIGNATURE` (x402 v2 exact) when a facilitator is configured:
+
+```ruby
+# Public / testnet facilitator
+x402: {facilitator: "https://x402.org/facilitator"}
+
+# Per-request headers (bearer token, CDP JWT, etc.)
+x402: {facilitator: {url: facilitator_url, headers: -> { {"Authorization" => "Bearer #{token}"} }}}
+
+# The proc may take the request path (`/verify`, `/settle`) when headers differ per call
+x402: {facilitator: {url: cdp_url, headers: ->(path) { cdp_headers(path) }}}
+
+# Any client with #verify / #settle
+x402: {facilitator: cdp_client}
+```
 
 ### Client
 
