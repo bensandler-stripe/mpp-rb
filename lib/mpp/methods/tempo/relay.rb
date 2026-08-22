@@ -162,7 +162,7 @@ module Mpp
             "realm" => echo.realm,
             "method" => echo.method,
             "intent" => echo.intent,
-            "request" => echo.request
+            "request" => decode_request(echo.request)
           }
           challenge["expires"] = echo.expires if echo.expires
           challenge["digest"] = echo.digest if echo.digest
@@ -174,6 +174,15 @@ module Mpp
           }
           input["source"] = credential.source if credential.source
           input
+        end
+
+        def decode_request(request)
+          return request if request.is_a?(Hash)
+          return request unless request.is_a?(String) && !request.empty?
+
+          Mpp::Parsing.b64_decode(request)
+        rescue Mpp::ParseError
+          request
         end
 
         def idempotency_key(input)
