@@ -4,7 +4,7 @@
 module Mpp
   module Http
     # Shared `{url:, headers:}` helpers used by the x402 facilitator and Tempo
-    # fee-payer HTTP clients.
+    # fee-payer and relay HTTP clients.
     #
     # `headers` may be:
     #   * a Hash of static header names/values
