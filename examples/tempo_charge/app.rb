@@ -39,3 +39,22 @@ get "/paid" do
   content_type :json
   JSON.generate({message: "Payment received."})
 end
+
+# Zero-amount wallet-ownership proof (EIP-712 v3). No on-chain transfer.
+get "/proof" do
+  result = server.charge(env["HTTP_AUTHORIZATION"], "0",
+    description: "Wallet ownership proof")
+
+  if result.is_a?(Mpp::Challenge)
+    resp = Mpp::Server::Decorator.make_challenge_response(result, server.realm)
+    status resp["status"]
+    headers resp["headers"]
+    body resp["body"]
+    return
+  end
+
+  _credential, receipt = result
+  headers "Payment-Receipt" => receipt.to_payment_receipt
+  content_type :json
+  JSON.generate({message: "Proof verified."})
+end
