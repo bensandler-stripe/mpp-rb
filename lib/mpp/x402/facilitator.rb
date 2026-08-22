@@ -152,8 +152,15 @@ module Mpp
           Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned HTTP #{response.code}")
         end
 
-        parsed = JSON.parse(T.must(response.body))
-        Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned HTTP #{response.code}") unless parsed.is_a?(Hash)
+        body = response.body.to_s
+        if body.empty?
+          Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned an empty body")
+        end
+
+        parsed = JSON.parse(body)
+        unless parsed.is_a?(Hash)
+          Kernel.raise Mpp::VerificationFailedError.new(reason: "facilitator #{path} returned JSON that is not an object")
+        end
 
         parsed
       rescue JSON::ParserError

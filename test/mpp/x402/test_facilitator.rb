@@ -163,6 +163,26 @@ class TestX402Facilitator < Minitest::Test
     assert_match(/HTTP 401/, error.message)
   end
 
+  def test_empty_body_raises
+    stub_request(:post, "https://facilitator.example/verify")
+      .to_return(status: 200, body: nil)
+
+    error = assert_raises(Mpp::VerificationFailedError) do
+      @facilitator.verify(@payload, @requirements)
+    end
+    assert_match(/empty body/, error.message)
+  end
+
+  def test_non_object_json_raises
+    stub_request(:post, "https://facilitator.example/verify")
+      .to_return(status: 200, body: "[]")
+
+    error = assert_raises(Mpp::VerificationFailedError) do
+      @facilitator.verify(@payload, @requirements)
+    end
+    assert_match(/not an object/, error.message)
+  end
+
   def test_config_requires_url
     error = assert_raises(ArgumentError) do
       Mpp::X402::Facilitator.resolve({token: "tok_123"})
