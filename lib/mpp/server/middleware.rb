@@ -114,7 +114,8 @@ module Mpp
             body: request_body,
             url: url,
             accept_payment: accept_payment,
-            http_method: http_method
+            http_method: http_method,
+            scope: mppx_scope(env)
           )
         end
 

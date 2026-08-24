@@ -87,6 +87,12 @@ module Mpp
         @method.x402_matches?(payload, canonical_request)
       end
 
+      # Return a per-request offer bound to the Rack request scope.
+      sig { params(scope: T::Hash[String, String]).returns(ComposeOffer) }
+      def with_scope(scope)
+        ComposeOffer.new(@handler, @method, @options.merge(mppx_scope: @options[:mppx_scope] || scope.dup))
+      end
+
       private
 
       sig { returns(String) }
@@ -157,10 +163,22 @@ module Mpp
           body: T.untyped,
           url: T.nilable(String),
           accept_payment: T.nilable(String),
-          http_method: T.nilable(String)
+          http_method: T.nilable(String),
+          scope: T.nilable(T::Hash[String, String])
         ).returns(ComposedResult)
       end
-      def call(authorization: nil, payment_signature: nil, body: nil, url: nil, accept_payment: nil, http_method: nil)
+      def call(authorization: nil, payment_signature: nil, body: nil, url: nil, accept_payment: nil, http_method: nil, scope: nil)
+        if scope && !scope.empty?
+          return self.class.new(handler: @handler, offers: @offers.map { |offer| offer.with_scope(scope) }).call(
+            authorization: authorization,
+            payment_signature: payment_signature,
+            body: body,
+            url: url,
+            accept_payment: accept_payment,
+            http_method: http_method
+          )
+        end
+
         dispatched = dispatch_credential(
           authorization: authorization,
           payment_signature: payment_signature,

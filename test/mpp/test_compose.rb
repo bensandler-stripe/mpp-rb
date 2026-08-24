@@ -82,6 +82,12 @@ class TestCompose < Minitest::Test
     assert_equal ["tempo", "stripe"], result.challenges.map(&:method)
   end
 
+  def test_scoped_offer_preserves_explicit_scope
+    offer = @handler.compose([@tempo, {amount: "1.00", mppx_scope: {"resource" => "/configured"}}]).offers.first
+
+    assert_equal({"resource" => "/configured"}, offer.with_scope({"resource" => "/rack"}).options[:mppx_scope])
+  end
+
   def test_compose_dispatches_matching_credential
     composed = @handler.compose(
       [@tempo, {amount: "1.00"}],
