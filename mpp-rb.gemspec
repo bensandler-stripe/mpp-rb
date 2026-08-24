@@ -17,6 +17,7 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "base64", "~> 0.3"
   spec.add_dependency "keccak", "~> 1.3"
+  spec.add_dependency "sorbet-runtime"
 
   # keccak is Ethereum Keccak-256 (not SHA3-256) for Tempo attribution memos.
   # Optional deps are autoloaded:

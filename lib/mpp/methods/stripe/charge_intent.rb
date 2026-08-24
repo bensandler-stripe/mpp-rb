@@ -78,15 +78,16 @@ module Mpp
             client = @client || ::Stripe::StripeClient.new(@secret_key)
             result = client.v1.payment_intents.create(
               params,
-              {idempotency_key: stripe_idempotency_key(credential)}
+              {stripe_version: Defaults::MACHINE_PAYMENTS_API_VERSION, idempotency_key: stripe_idempotency_key(credential)}
             )
           rescue => e
             raise Mpp::VerificationError, e.message
           end
 
           # https://docs.stripe.com/error-low-level#idempotency
-          if result.respond_to?(:last_response) &&
-              result.last_response&.headers&.[]("idempotent-replayed") == "true"
+          last_response = result.last_response if result.respond_to?(:last_response)
+          response_headers = last_response.respond_to?(:http_headers) ? last_response.http_headers : last_response&.headers
+          if response_headers&.[]("idempotent-replayed") == "true"
             raise Mpp::VerificationError, "Payment has already been processed."
           end
 
