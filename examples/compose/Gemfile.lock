@@ -1,8 +1,9 @@
 PATH
   remote: ../..
   specs:
-    mpp-rb (0.1.4)
+    mpp-rb (0.1.5)
       base64 (~> 0.3)
+      keccak (~> 1.3)
 
 GEM
   remote: https://rubygems.org/
@@ -10,6 +11,7 @@ GEM
     base64 (0.3.0)
     bigdecimal (4.1.2)
     dotenv (3.2.0)
+    keccak (1.3.3)
     logger (1.7.0)
     mustermann (3.1.1)
     nio4r (2.7.5)
@@ -56,8 +58,9 @@ CHECKSUMS
   bigdecimal (4.1.2) sha256=53d217666027eab4280346fba98e7d5b66baaae1b9c3c1c0ffe89d48188a3fbd
   bundler (4.0.11) sha256=5bcec0fb78302e48d02ee46f10ee6e6942be647ba5b44a6d1ddfda9a240ce785
   dotenv (3.2.0) sha256=e375b83121ea7ca4ce20f214740076129ab8514cd81378161f11c03853fe619d
+  keccak (1.3.3) sha256=970dcb1e78b8c3129ba2baff8a5baa5cebf391136db1f4018e8ccc9130794557
   logger (1.7.0) sha256=196edec7cc44b66cfb40f9755ce11b392f21f7967696af15d274dde7edff0203
-  mpp-rb (0.1.4)
+  mpp-rb (0.1.5)
   mustermann (3.1.1) sha256=4c6170c7234d5499c345562ba7c7dfe73e1754286dcc1abb053064d66a127198
   nio4r (2.7.5) sha256=6c90168e48fb5f8e768419c93abb94ba2b892a1d0602cb06eef16d8b7df1dca1
   puma (8.0.2) sha256=c8ed871dfbbe66448ea9ffd46692342d9804d4071522b52b5331b7b6e7b686fb

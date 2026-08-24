@@ -1,8 +1,9 @@
 PATH
   remote: ../..
   specs:
-    mpp-rb (0.1.3)
+    mpp-rb (0.1.5)
       base64 (~> 0.3)
+      keccak (~> 1.3)
 
 GEM
   remote: https://rubygems.org/
@@ -10,6 +11,7 @@ GEM
     base64 (0.3.0)
     bigdecimal (4.1.2)
     dotenv (3.2.0)
+    keccak (1.3.3)
     logger (1.7.0)
     mustermann (3.1.1)
     nio4r (2.7.5)
