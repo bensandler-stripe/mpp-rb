@@ -7,6 +7,7 @@ module Mpp
     #   name       -> String
     #   intents    -> Hash[String, Intent]
     #   create_credential(challenge) -> Credential
+    #   on_payment_success -> optional callable receiving a payment.success payload
 
     module MethodHelper
       extend T::Sig

@@ -152,6 +152,18 @@ end
 
 Client events are `challenge.received`, `credential.created`, `payment.response`, and `payment.failed`. Server events are `challenge.created`, `payment.success`, and `payment.failed`.
 
+When a side effect belongs to one payment method, attach it to the method instead. The hook only receives successful payments for that method and intent; an exception in the hook does not invalidate the payment.
+
+```ruby
+method = Mpp::Methods::Tempo.tempo(
+  intents: {"charge" => Mpp::Methods::Tempo::ChargeIntent.new},
+  recipient: "0x0000000000000000000000000000000000000001",
+  on_payment_success: ->(payload) {
+    record_payment(payload[:receipt], payload[:request])
+  },
+)
+```
+
 ### Rack Middleware
 
 ```ruby
