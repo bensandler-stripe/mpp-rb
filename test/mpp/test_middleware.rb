@@ -309,6 +309,47 @@ class TestMiddleware < Minitest::Test
     assert_equal 2, www.length
   end
 
+  def test_compose_handler_binds_credentials_to_rack_scope
+    tempo = mock_named_method("tempo", Mpp::Methods::Tempo::Defaults::PATH_USD, "0x#{"0" * 39}1")
+    stripe = mock_named_method("stripe", "usd", "acct_123", decimals: 2)
+    handler = Mpp::Server::MppHandler.new(
+      methods: [tempo, stripe],
+      realm: @realm,
+      secret_key: @secret_key
+    )
+    middleware = Mpp::Server::Middleware.new(
+      ->(_env) { [200, {}, ["OK"]] },
+      handler: handler.compose([tempo, {amount: "1.00"}], [stripe, {amount: "1.00"}]),
+      pricing: ->(_env) { {amount: "1.00"} }
+    )
+    scoped_env = minimal_env.merge(
+      "PATH_INFO" => "/paid/one",
+      "QUERY_STRING" => "view=full",
+      "action_dispatch.route_uri_pattern" => "/paid/:id"
+    )
+
+    status, headers, _body = middleware.call(scoped_env)
+
+    assert_equal 402, status
+    challenge = Mpp::Challenge.from_www_authenticate(Array(headers["WWW-Authenticate"]).first)
+    assert_equal(
+      {"route" => "/paid/:id", "resource" => "/paid/one", "query" => "view=full"},
+      challenge.request["_mppx_scope"]
+    )
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+
+    status, _headers, _body = middleware.call(scoped_env.merge("HTTP_AUTHORIZATION" => credential.to_authorization))
+    assert_equal 200, status
+
+    status, _headers, _body = middleware.call(
+      scoped_env.merge("HTTP_AUTHORIZATION" => credential.to_authorization, "PATH_INFO" => "/paid/two")
+    )
+    assert_equal 402, status
+  end
+
   def test_varies_on_payment_signature_for_x402_success
     handler = mock_handler
     pricing = ->(_env) { {amount: "1.00"} }
