@@ -44,6 +44,7 @@ module Mpp
         @secret_key = T.let(secret_key, String)
         @defaults = T.let(defaults || {}, T::Hash[String, T.untyped])
         @events = T.let(events || Mpp::Events.server_dispatcher, Mpp::Events::Dispatcher)
+        @method_hook_events = T.let(Mpp::Events.server_dispatcher, Mpp::Events::Dispatcher)
         register_method_payment_success
       end
 
@@ -181,6 +182,7 @@ module Mpp
           description: offer_opts[:description],
           expires: offer_opts[:expires],
           events: @events,
+          method_hook_events: @method_hook_events,
           body: body
         )
       end
@@ -350,9 +352,10 @@ module Mpp
           raise
         end
 
-        if @events.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
+        if @events.has_handlers?(Mpp::Events::PAYMENT_SUCCESS) || @method_hook_events.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
           Verify.emit_payment_success(
             dispatcher: @events,
+            method_hook_dispatcher: @method_hook_events,
             challenge: challenge,
             credential: credential,
             method: method_context,
@@ -375,8 +378,8 @@ module Mpp
           raise ArgumentError, "on_payment_success must be callable" unless hook.respond_to?(:call)
 
           method_name = payment_method.name
-          intent_names = payment_method.intents.keys
-          @events.on(Mpp::Events::PAYMENT_SUCCESS) do |payload|
+          intent_names = payment_method.intents.each_value.map { |intent| intent.name }
+          @method_hook_events.on(Mpp::Events::PAYMENT_SUCCESS) do |payload|
             event_method = payload[:method]
             next unless event_method.is_a?(Hash)
             next unless event_method[:name] == method_name

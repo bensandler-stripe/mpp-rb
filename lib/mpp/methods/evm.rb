@@ -10,7 +10,8 @@ module Mpp
       autoload :EvmMethod, "mpp/methods/evm/evm_method"
 
       # Factory for a server-side EVM charge method with inline x402 exact support.
-      def self.charge(currency:, recipient:, x402:, authorization: nil, chain_id: nil, decimals: nil)
+      def self.charge(currency:, recipient:, x402:, authorization: nil, chain_id: nil, decimals: nil,
+        on_payment_success: nil, can_offer: nil)
         resolved = Assets.resolve(
           currency,
           authorization: authorization,
@@ -32,7 +33,9 @@ module Mpp
           decimals: resolved.fetch(:decimals),
           chain_id: resolved.fetch(:chain_id),
           authorization: resolved.fetch(:authorization),
-          x402: x402_options
+          x402: x402_options,
+          on_payment_success: on_payment_success,
+          can_offer: can_offer
         )
         method.intents = {"charge" => charge_intent}
         method

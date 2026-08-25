@@ -38,6 +38,61 @@ class TestEvmCharge < Minitest::Test
     assert_equal "evm", @method.name
   end
 
+  def test_factory_exposes_payment_success_hook
+    hook = ->(_payload) {}
+    method = Mpp::Methods::Evm.charge(
+      currency: Mpp::Methods::Evm::Assets::BASE_SEPOLIA_USDC,
+      recipient: RECIPIENT,
+      x402: {facilitator: FACILITATOR},
+      on_payment_success: hook
+    )
+
+    assert_same hook, method.on_payment_success
+  end
+
+  def test_factory_requires_a_callable_payment_success_hook
+    error = assert_raises(ArgumentError) do
+      Mpp::Methods::Evm.charge(
+        currency: Mpp::Methods::Evm::Assets::BASE_SEPOLIA_USDC,
+        recipient: RECIPIENT,
+        x402: {facilitator: FACILITATOR},
+        on_payment_success: Object.new
+      )
+    end
+
+    assert_equal "on_payment_success must be callable", error.message
+  end
+
+  def test_factory_exposes_offer_availability_hook
+    seen = []
+    method = Mpp::Methods::Evm.charge(
+      currency: Mpp::Methods::Evm::Assets::BASE_SEPOLIA_USDC,
+      recipient: RECIPIENT,
+      x402: {facilitator: FACILITATOR},
+      can_offer: lambda { |request|
+        seen << request
+        false
+      }
+    )
+
+    refute method.can_offer?({"amount" => "10000"})
+    assert_equal [{"amount" => "10000"}], seen
+    assert @method.can_offer?({"amount" => "10000"})
+  end
+
+  def test_factory_requires_a_callable_offer_availability_hook
+    error = assert_raises(ArgumentError) do
+      Mpp::Methods::Evm.charge(
+        currency: Mpp::Methods::Evm::Assets::BASE_SEPOLIA_USDC,
+        recipient: RECIPIENT,
+        x402: {facilitator: FACILITATOR},
+        can_offer: Object.new
+      )
+    end
+
+    assert_equal "can_offer must be callable", error.message
+  end
+
   def test_charge_returns_native_challenge
     result = @handler.charge(nil, "0.01")
 
@@ -128,6 +183,27 @@ class TestEvmCharge < Minitest::Test
     assert_equal true, decoded["success"]
     assert_equal "0xsettled", decoded["transaction"]
     assert_equal PAYER, decoded["payer"]
+  end
+
+  def test_payment_success_hook_runs_after_x402_settlement
+    seen = []
+    method = Mpp::Methods::Evm.charge(
+      currency: Mpp::Methods::Evm::Assets::BASE_SEPOLIA_USDC,
+      recipient: RECIPIENT,
+      x402: {facilitator: FACILITATOR},
+      on_payment_success: ->(payload) { seen << payload }
+    )
+    handler = Mpp::Server::MppHandler.new(method: method, realm: REALM, secret_key: SECRET)
+    stub_facilitator(transaction: "0xsettled")
+    challenge = handler.charge(nil, "0.01")
+
+    Mpp::Methods::Evm::Authorization.stub(:recover, PAYER) do
+      handler.charge(nil, "0.01", payment_signature: encode_signature(x402_payload(challenge)), url: URL)
+    end
+
+    assert_equal 1, seen.length
+    assert_equal({name: "evm", intent: "charge"}, seen.first[:method])
+    assert_equal "0xsettled", seen.first[:receipt].reference
   end
 
   def test_failed_facilitator_verify_returns_challenge

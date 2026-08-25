@@ -32,7 +32,7 @@ module Mpp
 
         available = method.can_offer?(request)
         unless available == true || available == false
-          raise ArgumentError, "can_offer? must return true or false"
+          Kernel.raise ArgumentError, "can_offer? must return true or false"
         end
 
         available

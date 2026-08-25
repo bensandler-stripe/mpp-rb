@@ -561,57 +561,45 @@ class TestMppHandler < Minitest::Test
       assert_equal({name: "tempo", intent: "charge"}, payload[:method])
       assert_equal "success", payload[:receipt].status
     end
+    assert_same seen.find { |kind, _payload| kind == :global }.last,
+      seen.find { |kind, _payload| kind == :method }.last
   end
 
-  def test_method_payment_success_hook_only_receives_matching_events
+  def test_method_payment_success_hook_matches_the_intent_name_not_its_registry_key
     seen = []
-    events = Mpp::Events.server_dispatcher
-    payment_handler(payment_method(on_payment_success: ->(payload) { seen << payload }), events: events)
-    payload = {
-      challenge: nil,
-      credential: nil,
-      receipt: Mpp::Receipt.success("ref"),
-      request: {}
-    }
+    intent = MockIntent.new(name: "pay")
+    method = MockMethod.new(
+      intents: {"charge" => intent},
+      currency: CURRENCY,
+      recipient: RECIPIENT,
+      on_payment_success: ->(payload) { seen << payload }
+    )
 
-    events.emit(Mpp::Events::PAYMENT_SUCCESS, payload.merge(method: {name: "stripe", intent: "charge"}))
-    events.emit(Mpp::Events::PAYMENT_SUCCESS, payload.merge(method: {name: "tempo", intent: "session"}))
-    events.emit(Mpp::Events::PAYMENT_SUCCESS, payload.merge(method: {name: "tempo", intent: "charge"}))
+    pay(payment_handler(method))
 
     assert_equal 1, seen.length
-    assert_equal({name: "tempo", intent: "charge"}, seen.first[:method])
+    assert_equal({name: "tempo", intent: "pay"}, seen.first[:method])
   end
 
-  def test_every_registered_method_receives_its_own_payment_success_events
+  def test_method_payment_success_hooks_are_isolated_per_handler_with_a_shared_dispatcher
     seen = []
     events = Mpp::Events.server_dispatcher
-    tempo = payment_method(on_payment_success: ->(payload) { seen << [:tempo, payload] })
-    stripe = MockMethod.new(
-      name: "stripe",
-      intents: {"charge" => MockIntent.new},
-      currency: "usd",
-      recipient: "acct_123",
-      decimals: 2,
-      on_payment_success: ->(payload) { seen << [:stripe, payload] }
-    )
-    Mpp::Server::MppHandler.new(
-      methods: [tempo, stripe],
-      realm: "api.example.com",
-      secret_key: "test-secret",
-      events: events
-    )
-    payload = {
-      challenge: nil,
-      credential: nil,
-      receipt: Mpp::Receipt.success("ref"),
-      request: {}
-    }
+    first = payment_method(on_payment_success: ->(_payload) { seen << :first })
+    second = payment_method(on_payment_success: ->(_payload) { seen << :second })
+    first_handler = payment_handler(first, events: events)
+    payment_handler(second, events: events)
 
-    events.emit(Mpp::Events::PAYMENT_SUCCESS, payload.merge(method: {name: "tempo", intent: "charge"}))
-    events.emit(Mpp::Events::PAYMENT_SUCCESS, payload.merge(method: {name: "stripe", intent: "charge"}))
+    pay(first_handler)
 
-    assert_equal [:stripe, :tempo], seen.map(&:first).sort
-    assert_equal ["tempo", "stripe"], seen.map { |_name, event| event[:method][:name] }
+    assert_equal [:first], seen
+
+    reused = payment_method(on_payment_success: ->(_payload) { seen << :reused })
+    first_handler = payment_handler(reused, events: events)
+    payment_handler(reused, events: events)
+
+    pay(first_handler)
+
+    assert_equal [:first, :reused], seen
   end
 
   def test_method_payment_success_hook_errors_do_not_stop_payment

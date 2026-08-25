@@ -15,13 +15,13 @@ module Mpp
       # Verify a payment credential or generate a new challenge.
       #
       # Returns Challenge (payment required) or [Credential, Receipt] (verified).
-      sig { params(authorization: T.nilable(String), intent: T.untyped, request: T::Hash[String, T.untyped], realm: String, secret_key: String, method: T.nilable(String), description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String), events: T.nilable(Mpp::Events::Dispatcher), body: T.untyped).returns(T.untyped) }
+      sig { params(authorization: T.nilable(String), intent: T.untyped, request: T::Hash[String, T.untyped], realm: String, secret_key: String, method: T.nilable(String), description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String), events: T.nilable(Mpp::Events::Dispatcher), method_hook_events: T.nilable(Mpp::Events::Dispatcher), body: T.untyped).returns(T.untyped) }
       def verify_or_challenge(authorization:, intent:, request:, realm:, secret_key:,
-        method: nil, description: nil, meta: nil, expires: nil, events: nil, body: nil)
+        method: nil, description: nil, meta: nil, expires: nil, events: nil, method_hook_events: nil, body: nil)
         method_name = method || "tempo"
         request = Mpp::Units.transform_units(request)
         dispatcher = events
-        events_enabled = dispatcher&.has_handlers?
+        events_enabled = dispatcher&.has_handlers? || method_hook_events&.has_handlers?
         method_context = events_enabled ? {name: method_name, intent: intent.name} : nil
 
         new_challenge = Kernel.lambda { |credential = nil, error = nil, submitted_challenge = nil|
@@ -172,9 +172,10 @@ module Mpp
           end
           Kernel.raise
         end
-        if dispatcher&.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
+        if dispatcher&.has_handlers?(Mpp::Events::PAYMENT_SUCCESS) || method_hook_events&.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
           emit_payment_success(
             dispatcher: dispatcher,
+            method_hook_dispatcher: method_hook_events,
             challenge: echo,
             credential: credential,
             method: T.must(method_context),
@@ -258,17 +259,24 @@ module Mpp
         dispatcher.emit(Mpp::Events::PAYMENT_FAILED, payload)
       end
 
-      sig { params(dispatcher: Mpp::Events::Dispatcher, challenge: T.untyped, credential: T.untyped, method: T::Hash[Symbol, T.untyped], receipt: T.untyped, request: T::Hash[String, T.untyped]).void }
-      def emit_payment_success(dispatcher:, challenge:, credential:, method:, receipt:, request:)
-        return unless dispatcher.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
+      # Method hooks are owned by a handler, while `dispatcher` may be shared
+      # by many handlers. Emit the same payload to each without exposing that
+      # handler ownership in the public event payload.
+      sig { params(dispatcher: T.nilable(Mpp::Events::Dispatcher), challenge: T.untyped, credential: T.untyped, method: T::Hash[Symbol, T.untyped], receipt: T.untyped, request: T::Hash[String, T.untyped], method_hook_dispatcher: T.nilable(Mpp::Events::Dispatcher)).void }
+      def emit_payment_success(dispatcher:, challenge:, credential:, method:, receipt:, request:, method_hook_dispatcher: nil)
+        public_handlers = dispatcher&.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
+        hook_handlers = method_hook_dispatcher&.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
+        return unless public_handlers || hook_handlers
 
-        dispatcher.emit(Mpp::Events::PAYMENT_SUCCESS, {
+        payload = {
           challenge: challenge,
           credential: credential,
           method: method,
           receipt: receipt,
           request: request
-        })
+        }
+        dispatcher.emit(Mpp::Events::PAYMENT_SUCCESS, payload) if public_handlers
+        method_hook_dispatcher.emit(Mpp::Events::PAYMENT_SUCCESS, payload) if hook_handlers && method_hook_dispatcher != dispatcher
       end
     end
   end

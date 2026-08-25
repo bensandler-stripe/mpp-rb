@@ -149,6 +149,36 @@ class TestStripeMethod < Minitest::Test
     end
   end
 
+  def test_factory_exposes_offer_availability_hook
+    seen = []
+    method = Mpp::Methods::Stripe.stripe(
+      secret_key: "sk_test_fake",
+      network_id: "acct_test123",
+      payment_methods: ["card"],
+      can_offer: lambda { |request|
+        seen << request
+        false
+      }
+    )
+
+    refute method.can_offer?({"amount" => "50"})
+    assert_equal [{"amount" => "50"}], seen
+    assert @method.can_offer?({"amount" => "50"})
+  end
+
+  def test_rejects_non_callable_offer_availability_hook
+    error = assert_raises(ArgumentError) do
+      Mpp::Methods::Stripe::StripeMethod.new(
+        secret_key: "sk_test_fake",
+        network_id: "acct_test123",
+        payment_methods: ["card"],
+        can_offer: Object.new
+      )
+    end
+
+    assert_equal "can_offer must be callable", error.message
+  end
+
   def test_client_method_echoes_request_bound_external_id
     method = Mpp::Methods::Stripe::ClientMethod.new(
       create_spt: ->(**_params) { "spt_test123" },
