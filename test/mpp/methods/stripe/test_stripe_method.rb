@@ -122,6 +122,33 @@ class TestStripeMethod < Minitest::Test
     assert_instance_of Mpp::Methods::Stripe::ChargeIntent, method.intents["charge"]
   end
 
+  def test_factory_exposes_payment_success_hook
+    hook = ->(_payload) {}
+    method = Mpp::Methods::Stripe.stripe(
+      secret_key: "sk_test_fake",
+      network_id: "acct_test123",
+      payment_methods: ["card"],
+      on_payment_success: hook
+    )
+
+    assert_same hook, method.on_payment_success
+  end
+
+  def test_rejects_non_callable_payment_success_hook
+    [false, "not callable"].each do |hook|
+      error = assert_raises(ArgumentError) do
+        Mpp::Methods::Stripe::StripeMethod.new(
+          secret_key: "sk_test_fake",
+          network_id: "acct_test123",
+          payment_methods: ["card"],
+          on_payment_success: hook
+        )
+      end
+
+      assert_equal "on_payment_success must be callable", error.message
+    end
+  end
+
   def test_client_method_echoes_request_bound_external_id
     method = Mpp::Methods::Stripe::ClientMethod.new(
       create_spt: ->(**_params) { "spt_test123" },

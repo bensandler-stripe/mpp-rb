@@ -42,8 +42,8 @@ module Mpp
         @canonical_request ||= @handler.build_charge_request(@method, amount, **charge_kwargs)
       end
 
-      sig { params(authorization: T.nilable(String), payment_signature: T.nilable(String), body: T.untyped, url: T.nilable(String), http_method: T.nilable(String)).returns(T.untyped) }
-      def verify(authorization: nil, payment_signature: nil, body: nil, url: nil, http_method: nil)
+      sig { params(authorization: T.nilable(String), payment_signature: T.nilable(String), body: T.untyped, url: T.nilable(String), http_method: T.nilable(String), request_guard: T.nilable(T.proc.params(request: T::Hash[String, T.untyped]).returns(T::Boolean))).returns(T.untyped) }
+      def verify(authorization: nil, payment_signature: nil, body: nil, url: nil, http_method: nil, &request_guard)
         @handler.charge_one(
           @method,
           authorization,
@@ -52,13 +52,17 @@ module Mpp
           url: url,
           body: body,
           http_method: http_method,
-          **charge_kwargs
+          **charge_kwargs,
+          &request_guard
         )
       end
 
-      sig { params(body: T.untyped, url: T.nilable(String), http_method: T.nilable(String)).returns(Mpp::Challenge) }
+      sig { params(body: T.untyped, url: T.nilable(String), http_method: T.nilable(String)).returns(T.nilable(Mpp::Challenge)) }
       def challenge(body: nil, url: nil, http_method: nil)
-        result = verify(body: body, url: url, http_method: http_method)
+        result = verify(body: body, url: url, http_method: http_method) do |request|
+          Mpp::Server::MethodHelper.can_offer?(@method, request)
+        end
+        return nil if result.nil?
         return result if result.is_a?(Mpp::Challenge)
 
         Kernel.raise "expected a challenge from unpaid offer #{key}"
@@ -68,7 +72,7 @@ module Mpp
       def decorate_challenge(headers, challenge, url: nil, http_method: nil)
         return headers unless @method.respond_to?(:decorate_challenge)
 
-        @method.decorate_challenge(headers, challenge, url: url, http_method: http_method, request: canonical_request)
+        @method.decorate_challenge(headers, challenge, url: url, http_method: http_method, request: challenge.request)
         headers
       end
 
@@ -330,9 +334,14 @@ module Mpp
         ).returns(ComposedResult)
       end
       def merge_challenges(body:, url:, accept_payment:, http_method:)
-        pairs = @offers.map do |offer|
+        pairs = @offers.filter_map do |offer|
           challenge = offer.challenge(body: body, url: url, http_method: http_method)
+          next if challenge.nil?
+
           [offer, challenge]
+        end
+        if pairs.empty?
+          Kernel.raise ArgumentError, "No payment offers are available for this request"
         end
 
         ranked = AcceptPayment.apply(pairs.map { |_offer, challenge| challenge }, accept_payment)

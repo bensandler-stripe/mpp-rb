@@ -19,14 +19,18 @@ module Mpp
       class TempoMethod
         attr_reader :name, :account, :fee_payer, :fee_payer_allowed_fee_tokens,
           :root_account, :rpc_url, :chain_id, :currency, :recipient, :decimals, :client_id,
-          :expected_recipients, :relay
+          :expected_recipients, :relay, :on_payment_success
         attr_accessor :intents
 
         def initialize(account: nil, fee_payer: nil, root_account: nil,
           rpc_url: Defaults::RPC_URL, chain_id: nil, currency: nil,
           recipient: nil, decimals: 6, client_id: nil,
           expected_recipients: nil, fee_payer_allowed_fee_tokens: nil,
-          relay: nil)
+          relay: nil, on_payment_success: nil)
+          unless on_payment_success.nil? || on_payment_success.respond_to?(:call)
+            raise ArgumentError, "on_payment_success must be callable"
+          end
+
           @name = "tempo"
           @account = account
           @fee_payer = fee_payer
@@ -41,6 +45,7 @@ module Mpp
           @decimals = decimals
           @client_id = client_id
           @expected_recipients = expected_recipients&.map(&:downcase)&.to_set
+          @on_payment_success = on_payment_success
           @intents = {}
         end
 
@@ -251,7 +256,8 @@ module Mpp
       # Factory function to create a configured TempoMethod.
       def self.tempo(intents:, account: nil, fee_payer: nil, chain_id: nil, rpc_url: nil,
         root_account: nil, currency: nil, recipient: nil, decimals: 6, client_id: nil,
-        expected_recipients: nil, fee_payer_allowed_fee_tokens: nil, relay: nil)
+        expected_recipients: nil, fee_payer_allowed_fee_tokens: nil, relay: nil,
+        on_payment_success: nil)
         rpc_url ||= chain_id ? Defaults.rpc_url_for_chain(chain_id) : Defaults::RPC_URL
         currency ||= Defaults.default_currency_for_chain(chain_id)
 
@@ -273,7 +279,8 @@ module Mpp
           client_id: client_id,
           expected_recipients: expected_recipients,
           fee_payer_allowed_fee_tokens: fee_payer_allowed_fee_tokens,
-          relay: Relay.resolve_optional(relay)
+          relay: Relay.resolve_optional(relay),
+          on_payment_success: on_payment_success
         )
 
         intents.each_value do |intent|
