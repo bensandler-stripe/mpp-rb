@@ -148,6 +148,30 @@ class TestTempoExpectedRecipients < Minitest::Test
   end
 end
 
+class TestTempoMethodPaymentSuccessHook < Minitest::Test
+  def test_factory_exposes_payment_success_hook
+    hook = ->(_payload) {}
+    intent = Struct.new(:name).new("charge")
+
+    method = Mpp::Methods::Tempo.tempo(
+      intents: {"charge" => intent},
+      on_payment_success: hook
+    )
+
+    assert_same hook, method.on_payment_success
+  end
+
+  def test_rejects_non_callable_payment_success_hook
+    [false, "not callable"].each do |hook|
+      error = assert_raises(ArgumentError) do
+        Mpp::Methods::Tempo::TempoMethod.new(on_payment_success: hook)
+      end
+
+      assert_equal "on_payment_success must be callable", error.message
+    end
+  end
+end
+
 class TestTempoChainPinning < Minitest::Test
   RECIPIENT = "0x0000000000000000000000000000000000000001"
   SIGNED_TX = "0xdeadbeef"

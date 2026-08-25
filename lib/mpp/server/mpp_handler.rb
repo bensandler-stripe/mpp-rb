@@ -44,6 +44,8 @@ module Mpp
         @secret_key = T.let(secret_key, String)
         @defaults = T.let(defaults || {}, T::Hash[String, T.untyped])
         @events = T.let(events || Mpp::Events.server_dispatcher, Mpp::Events::Dispatcher)
+        @method_hook_events = T.let(Mpp::Events.server_dispatcher, Mpp::Events::Dispatcher)
+        register_method_payment_success
       end
 
       # Create with auto-detected realm and secret_key.
@@ -142,8 +144,10 @@ module Mpp
       end
 
       # Verify or challenge a single method. Used by compose and charge.
-      sig { params(method: T.untyped, authorization: T.nilable(String), amount: String, kwargs: T.untyped).returns(T.untyped) }
-      def charge_one(method, authorization, amount, **kwargs)
+      # The optional request guard can omit an offer after its canonical request
+      # is built, ensuring the guard and challenge use the exact same request.
+      sig { params(method: T.untyped, authorization: T.nilable(String), amount: String, kwargs: T.untyped, request_guard: T.nilable(T.proc.params(request: T::Hash[String, T.untyped]).returns(T::Boolean))).returns(T.untyped) }
+      def charge_one(method, authorization, amount, **kwargs, &request_guard)
         intent = method.intents["charge"]
         raise ArgumentError, "Method #{method.name} does not support charge intent" unless intent
 
@@ -152,6 +156,7 @@ module Mpp
         payment_signature = kwargs[:payment_signature]
         offer_opts = kwargs.except(*REQUEST_OPTION_KEYS)
         request = build_charge_request(method, amount, **offer_opts)
+        return nil if request_guard && !request_guard.call(request)
 
         if payment_signature && method.respond_to?(:bind_x402_credential)
           return verify_x402(
@@ -177,6 +182,7 @@ module Mpp
           description: offer_opts[:description],
           expires: offer_opts[:expires],
           events: @events,
+          method_hook_events: @method_hook_events,
           body: body
         )
       end
@@ -346,9 +352,10 @@ module Mpp
           raise
         end
 
-        if @events.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
+        if @events.has_handlers?(Mpp::Events::PAYMENT_SUCCESS) || @method_hook_events.has_handlers?(Mpp::Events::PAYMENT_SUCCESS)
           Verify.emit_payment_success(
             dispatcher: @events,
+            method_hook_dispatcher: @method_hook_events,
             challenge: challenge,
             credential: credential,
             method: method_context,
@@ -357,6 +364,30 @@ module Mpp
           )
         end
         [credential, receipt]
+      end
+
+      private
+
+      sig { void }
+      def register_method_payment_success
+        @methods.each do |payment_method|
+          next unless payment_method.respond_to?(:on_payment_success)
+
+          hook = payment_method.on_payment_success
+          next if hook.nil?
+          raise ArgumentError, "on_payment_success must be callable" unless hook.respond_to?(:call)
+
+          method_name = payment_method.name
+          intent_names = payment_method.intents.each_value.map { |intent| intent.name }
+          @method_hook_events.on(Mpp::Events::PAYMENT_SUCCESS) do |payload|
+            event_method = payload[:method]
+            next unless event_method.is_a?(Hash)
+            next unless event_method[:name] == method_name
+            next unless intent_names.include?(event_method[:intent])
+
+            hook.call(payload)
+          end
+        end
       end
     end
   end
