@@ -23,6 +23,20 @@ module Mpp
           request
         end
       end
+
+      # Check whether a method should be advertised for a canonical request.
+      # This only governs composing new 402 offers, never credential redemption.
+      sig { params(method: T.untyped, request: T::Hash[String, T.untyped]).returns(T::Boolean) }
+      def can_offer?(method, request)
+        return true unless method.respond_to?(:can_offer?)
+
+        available = method.can_offer?(request)
+        unless available == true || available == false
+          raise ArgumentError, "can_offer? must return true or false"
+        end
+
+        available
+      end
     end
   end
 end

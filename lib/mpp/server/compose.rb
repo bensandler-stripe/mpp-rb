@@ -42,12 +42,20 @@ module Mpp
         @canonical_request ||= @handler.build_charge_request(@method, amount, **charge_kwargs)
       end
 
+      # Whether this method should be advertised for this request. The predicate
+      # receives the same canonical request that is used to create its challenge.
+      sig { returns(T::Boolean) }
+      def can_offer?
+        Mpp::Server::MethodHelper.can_offer?(@method, canonical_request)
+      end
+
       sig { params(authorization: T.nilable(String), payment_signature: T.nilable(String), body: T.untyped, url: T.nilable(String), http_method: T.nilable(String)).returns(T.untyped) }
       def verify(authorization: nil, payment_signature: nil, body: nil, url: nil, http_method: nil)
         @handler.charge_one(
           @method,
           authorization,
           amount,
+          _canonical_request: canonical_request,
           payment_signature: payment_signature,
           url: url,
           body: body,
@@ -330,9 +338,14 @@ module Mpp
         ).returns(ComposedResult)
       end
       def merge_challenges(body:, url:, accept_payment:, http_method:)
-        pairs = @offers.map do |offer|
+        pairs = @offers.filter_map do |offer|
+          next unless offer.can_offer?
+
           challenge = offer.challenge(body: body, url: url, http_method: http_method)
           [offer, challenge]
+        end
+        if pairs.empty?
+          Kernel.raise ArgumentError, "No payment offers are available for this request"
         end
 
         ranked = AcceptPayment.apply(pairs.map { |_offer, challenge| challenge }, accept_payment)

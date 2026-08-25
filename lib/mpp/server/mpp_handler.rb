@@ -151,8 +151,9 @@ module Mpp
         body = kwargs[:body]
         url = kwargs[:url]
         payment_signature = kwargs[:payment_signature]
+        canonical_request = kwargs.delete(:_canonical_request)
         offer_opts = kwargs.except(*REQUEST_OPTION_KEYS)
-        request = build_charge_request(method, amount, **offer_opts)
+        request = canonical_request || build_charge_request(method, amount, **offer_opts)
 
         if payment_signature && method.respond_to?(:bind_x402_credential)
           return verify_x402(
