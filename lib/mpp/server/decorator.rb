@@ -38,9 +38,11 @@ module Mpp
 
           headers[key] = value
         end
+        credential_headers = challenges.map(&:credential_header).uniq
+        vary = extra_headers.key?("PAYMENT-REQUIRED") ? credential_headers + ["PAYMENT-SIGNATURE"] : credential_headers
         Mpp::Server::Middleware.mark_authorization_bound_response(
           headers,
-          vary: extra_headers.key?("PAYMENT-REQUIRED") ? ["Authorization", "PAYMENT-SIGNATURE"] : ["Authorization"]
+          vary: vary
         )
         {
           "_mpp_challenge" => true,

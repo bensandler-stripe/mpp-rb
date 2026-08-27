@@ -37,6 +37,7 @@ module Mpp
         return @app.call(env) unless charge_opts
 
         authorization = env["HTTP_AUTHORIZATION"]
+        payment_authorization = env["HTTP_PAYMENT_AUTHORIZATION"]
         payment_signature = env["HTTP_PAYMENT_SIGNATURE"]
         accept_payment = env["HTTP_ACCEPT_PAYMENT"]
         http_method = env["REQUEST_METHOD"]
@@ -50,6 +51,7 @@ module Mpp
           env,
           charge_opts,
           authorization: authorization,
+          payment_authorization: payment_authorization,
           payment_signature: payment_signature,
           accept_payment: accept_payment,
           http_method: http_method,
@@ -67,7 +69,7 @@ module Mpp
           extra_headers.each { |key, value| headers[key] = value unless value.nil? }
           decorate_single_method_receipt(headers, credential, receipt, payment_signature)
         end
-        vary = ["Authorization"]
+        vary = [credential_vary_field]
         vary << "PAYMENT-SIGNATURE" if x402_bound?(headers, payment_signature)
         self.class.mark_authorization_bound_response(headers, vary: vary)
 
@@ -99,6 +101,7 @@ module Mpp
           env: T.untyped,
           charge_opts: T.untyped,
           authorization: T.untyped,
+          payment_authorization: T.untyped,
           payment_signature: T.untyped,
           accept_payment: T.untyped,
           http_method: T.untyped,
@@ -106,10 +109,11 @@ module Mpp
           request_body: T.untyped
         ).returns(T.untyped)
       end
-      def verify_payment(env, charge_opts, authorization:, payment_signature:, accept_payment:, http_method:, url:, request_body:)
+      def verify_payment(env, charge_opts, authorization:, payment_authorization:, payment_signature:, accept_payment:, http_method:, url:, request_body:)
         if @handler.is_a?(Mpp::Server::ComposedHandler)
           return @handler.call(
             authorization: authorization,
+            payment_authorization: payment_authorization,
             payment_signature: payment_signature,
             body: request_body,
             url: url,
@@ -127,6 +131,7 @@ module Mpp
           amount,
           **opts,
           body: request_body,
+          payment_authorization: payment_authorization,
           payment_signature: payment_signature,
           url: url,
           accept_payment: accept_payment,
@@ -186,6 +191,15 @@ module Mpp
         !payment_signature.to_s.empty? ||
           headers.key?("PAYMENT-RESPONSE") ||
           headers.key?("PAYMENT-REQUIRED")
+      end
+
+      sig { returns(String) }
+      def credential_vary_field
+        if @handler.respond_to?(:requires_auth) && @handler.requires_auth
+          Mpp::PAYMENT_AUTHORIZATION_HEADER
+        else
+          Mpp::AUTHORIZATION_HEADER
+        end
       end
 
       sig { params(env: T.untyped).returns(String) }

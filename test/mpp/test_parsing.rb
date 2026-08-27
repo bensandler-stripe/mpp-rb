@@ -299,6 +299,64 @@ class TestParsing < Minitest::Test
     assert_equal challenge.request_b64, echo.request
   end
 
+  def test_www_authenticate_roundtrip_preserves_credential_header
+    challenge = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"},
+      header: Mpp::PAYMENT_AUTHORIZATION_HEADER
+    )
+    header = challenge.to_www_authenticate("api.example.com")
+    parsed = Mpp::Challenge.from_www_authenticate(header)
+
+    assert_includes header, %(header="#{Mpp::PAYMENT_AUTHORIZATION_HEADER}")
+    assert_equal Mpp::PAYMENT_AUTHORIZATION_HEADER, parsed.header
+    assert_equal Mpp::PAYMENT_AUTHORIZATION_HEADER, parsed.credential_header
+    assert parsed.verify("test-secret", "api.example.com")
+  end
+
+  def test_www_authenticate_omits_default_authorization_header
+    challenge = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"},
+      header: "authorization"
+    )
+    header = challenge.to_www_authenticate("api.example.com")
+
+    refute_includes header, "header="
+    assert_nil challenge.header
+  end
+
+  def test_credential_roundtrip_preserves_header
+    echo = Mpp::ChallengeEcho.new(
+      id: "test-id",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: "eyJhbW91bnQiOiIxMDAwMDAwIn0",
+      header: Mpp::PAYMENT_AUTHORIZATION_HEADER
+    )
+    credential = Mpp::Credential.new(
+      challenge: echo,
+      payload: {"type" => "transaction", "signature" => "0xabc"}
+    )
+    parsed = Mpp::Credential.from_authorization(credential.to_authorization)
+
+    assert_equal Mpp::PAYMENT_AUTHORIZATION_HEADER, parsed.challenge.header
+  end
+
+  def test_parse_www_authenticate_rejects_invalid_header_name
+    request_b64 = Mpp::Parsing.b64_encode({"amount" => "1000000"})
+    header = %(Payment id="abc", realm="api.example.com", method="tempo", intent="charge", request="#{request_b64}", header="not a header")
+
+    assert_raises(Mpp::ParseError) { Mpp::Challenge.from_www_authenticate(header) }
+  end
+
   def test_base64url_empty_request
     # Empty JSON object {} encodes to "e30"
     encoded = Mpp::Parsing.b64_encode({})

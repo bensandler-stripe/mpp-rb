@@ -193,4 +193,37 @@ class TestCompose < Minitest::Test
     assert result.payment_required?
     assert_equal 2, result.challenges.length
   end
+
+  def test_requires_auth_compose_advertises_and_accepts_payment_authorization
+    handler = Mpp::Server::MppHandler.new(
+      methods: [@tempo, @stripe],
+      realm: REALM,
+      secret_key: SECRET,
+      requires_auth: true
+    )
+    composed = handler.compose(
+      [@tempo, {amount: "1.00"}],
+      [@stripe, {amount: "1.00"}]
+    )
+    result = composed.call(authorization: "Bearer app-token")
+
+    assert result.payment_required?
+    assert result.challenges.all? { |challenge| challenge.header == Mpp::PAYMENT_AUTHORIZATION_HEADER }
+    www = Array(result.to_response["headers"]["WWW-Authenticate"])
+    assert www.all? { |value| value.include?(%(header="#{Mpp::PAYMENT_AUTHORIZATION_HEADER}")) }
+
+    stripe = result.challenges.find { |challenge| challenge.method == "stripe" }
+    credential = Mpp::Credential.new(
+      challenge: stripe.to_echo,
+      payload: {"spt" => "spt_test"}
+    )
+    paid = composed.call(
+      authorization: "Bearer app-token",
+      payment_authorization: credential.to_authorization
+    )
+
+    refute paid.payment_required?
+    _cred, receipt = paid.payment
+    assert_equal "stripe", receipt.method
+  end
 end

@@ -98,6 +98,33 @@ class TestClientTransport < Minitest::Test
       times: 1)
   end
 
+  def test_retry_uses_advertised_payment_authorization_header
+    challenge = Mpp::Challenge.create(
+      secret_key: "test-secret",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"},
+      expires: Mpp::Expires.minutes(5),
+      header: Mpp::PAYMENT_AUTHORIZATION_HEADER
+    )
+    www_auth = challenge.to_www_authenticate("api.example.com")
+
+    stub_request(:get, "https://api.example.com/resource")
+      .to_return(status: 402, headers: {"WWW-Authenticate" => www_auth})
+      .then
+      .to_return(status: 200, body: "ok")
+
+    @transport.get("https://api.example.com/resource", headers: {"Authorization" => "Bearer app-token"})
+
+    assert_requested(:get, "https://api.example.com/resource",
+      headers: {
+        "Authorization" => "Bearer app-token",
+        "Payment-Authorization" => /^Payment /
+      },
+      times: 1)
+  end
+
   def test_skips_expired_challenge
     challenge = Mpp::Challenge.create(
       secret_key: "test-secret",

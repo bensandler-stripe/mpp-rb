@@ -373,6 +373,46 @@ class TestMiddleware < Minitest::Test
     assert_includes vary_fields, "payment-signature"
   end
 
+  def test_requires_auth_reads_payment_authorization_and_preserves_bearer
+    handler = mock_handler(requires_auth: true)
+    pricing = ->(_env) { {amount: "1.00"} }
+    challenge = handler.charge("Bearer app-token", "1.00", mppx_scope: {"resource" => "/resource"})
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test", "data" => "ok"}
+    )
+    app = ->(_env) { [200, {}, ["OK"]] }
+    middleware = Mpp::Server::Middleware.new(app, handler: handler, pricing: pricing)
+
+    status, headers, body = middleware.call(
+      minimal_env.merge(
+        "HTTP_AUTHORIZATION" => "Bearer app-token",
+        "HTTP_PAYMENT_AUTHORIZATION" => credential.to_authorization
+      )
+    )
+
+    assert_equal 200, status
+    assert headers.key?("Payment-Receipt")
+    assert_equal ["OK"], body
+    vary_fields = headers.fetch("Vary", "").split(",").map { |field| field.strip.downcase }
+    assert_includes vary_fields, "payment-authorization"
+  end
+
+  def test_requires_auth_challenge_advertises_payment_authorization_header
+    handler = mock_handler(requires_auth: true)
+    pricing = ->(_env) { {amount: "1.00"} }
+    middleware = Mpp::Server::Middleware.new(->(_env) { [200, {}, ["OK"]] }, handler: handler, pricing: pricing)
+
+    status, headers, _body = middleware.call(
+      minimal_env.merge("HTTP_AUTHORIZATION" => "Bearer app-token")
+    )
+
+    assert_equal 402, status
+    challenge = Mpp::Challenge.from_www_authenticate(headers["WWW-Authenticate"])
+    assert_equal Mpp::PAYMENT_AUTHORIZATION_HEADER, challenge.header
+    assert_includes headers["WWW-Authenticate"], %(header="#{Mpp::PAYMENT_AUTHORIZATION_HEADER}")
+  end
+
   def minimal_env
     {
       "REQUEST_METHOD" => "GET",
@@ -398,7 +438,7 @@ class TestMiddleware < Minitest::Test
     middleware.call(minimal_env.merge("HTTP_AUTHORIZATION" => credential.to_authorization))
   end
 
-  def mock_handler
+  def mock_handler(requires_auth: false)
     verify_fn = lambda { |credential, _request|
       Mpp::Receipt.success("ref-#{credential.challenge.id[0..7]}")
     }
@@ -414,7 +454,8 @@ class TestMiddleware < Minitest::Test
     Mpp::Server::MppHandler.new(
       method: stub_method,
       realm: @realm,
-      secret_key: @secret_key
+      secret_key: @secret_key,
+      requires_auth: requires_auth
     )
   end
 
