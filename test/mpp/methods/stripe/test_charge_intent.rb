@@ -138,6 +138,7 @@ class TestStripeChargeIntent < Minitest::Test
       refute params.key?(:automatic_payment_methods)
       assert_equal({"order" => "123"}, params[:metadata])
       assert_equal "mpp_test-id_spt_test123", opts[:idempotency_key]
+      assert_equal Mpp::Methods::Stripe::Defaults::MACHINE_PAYMENTS_API_VERSION, opts[:stripe_version]
     end)
 
     receipt = intent_with_payment_intents(payment_intents).verify(credential, request)
@@ -240,15 +241,16 @@ class TestStripeChargeIntent < Minitest::Test
     credential = make_credential(payload: {"spt" => "spt_test123"})
     request = make_request
 
-    mock_headers = {"idempotent-replayed" => "true"}
-    mock_last_response = Struct.new(:headers).new(mock_headers)
-    mock_result = Struct.new(:id, :status, :last_response).new("pi_abc123", "succeeded", mock_last_response)
-    payment_intents = FakePaymentIntents.new(result: mock_result)
+    [:http_headers, :headers].each do |accessor|
+      response = Struct.new(accessor).new({"idempotent-replayed" => "true"})
+      result = Struct.new(:id, :status, :last_response).new("pi_abc123", "succeeded", response)
+      payment_intents = FakePaymentIntents.new(result: result)
 
-    err = assert_raises(Mpp::VerificationError) do
-      intent_with_payment_intents(payment_intents).verify(credential, request)
+      error = assert_raises(Mpp::VerificationError) do
+        intent_with_payment_intents(payment_intents).verify(credential, request)
+      end
+      assert_equal "Payment has already been processed.", error.message
     end
-    assert_equal "Payment has already been processed.", err.message
   end
 
   def test_verify_rejects_requires_action

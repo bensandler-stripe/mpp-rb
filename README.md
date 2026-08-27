@@ -75,6 +75,46 @@ else
 end
 ```
 
+### Stripe machine payments
+
+`Mpp::Methods::Stripe.create` configures Stripe Payment Tokens and static
+crypto deposit addresses from an injected Stripe client. Add the `stripe` gem
+to your application, then configure the methods:
+
+```ruby
+require "stripe"
+
+stripe_client = Stripe::StripeClient.new(ENV.fetch("STRIPE_SECRET_KEY"))
+payments = Mpp::Methods::Stripe.create(
+  client: stripe_client,
+  network_id: ENV.fetch("STRIPE_NETWORK_ID"),
+  livemode: false,
+  deposit_addresses: {
+    tempo: ENV.fetch("TEMPO_DEPOSIT_ADDRESS"),
+    base: ENV.fetch("BASE_DEPOSIT_ADDRESS")
+  },
+  metadata: {"product" => "example"}
+)
+
+server = Mpp.create(methods: payments.default_methods)
+```
+
+With no deposit addresses, defaults are Stripe Payment Tokens only.
+`default_methods` adds Tempo when its static address is configured. Add Base
+explicitly with its x402 facilitator:
+
+```ruby
+base = payments.base.charge(
+  x402: {facilitator: "https://x402.org/facilitator"}
+)
+server = Mpp.create(methods: [*payments.default_methods, base])
+```
+
+When composed, SPT offers below $0.50 and Tempo/Base offers below one cent are
+not advertised. Successful Tempo and Base payments are best-effort recorded as
+Stripe crypto transaction-verification PaymentIntents. Metadata is included on
+every Stripe PaymentIntent.
+
 `evm.charge` additionally emits `PAYMENT-REQUIRED` and accepts `PAYMENT-SIGNATURE` (x402 v2 exact) when a facilitator is configured:
 
 ```ruby

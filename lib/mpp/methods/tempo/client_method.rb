@@ -26,9 +26,12 @@ module Mpp
           rpc_url: Defaults::RPC_URL, chain_id: nil, currency: nil,
           recipient: nil, decimals: 6, client_id: nil,
           expected_recipients: nil, fee_payer_allowed_fee_tokens: nil,
-          relay: nil, on_payment_success: nil)
+          relay: nil, on_payment_success: nil, can_offer: nil)
           unless on_payment_success.nil? || on_payment_success.respond_to?(:call)
             raise ArgumentError, "on_payment_success must be callable"
+          end
+          if !can_offer.nil? && !can_offer.respond_to?(:call)
+            raise ArgumentError, "can_offer must be callable"
           end
 
           @name = "tempo"
@@ -46,7 +49,14 @@ module Mpp
           @client_id = client_id
           @expected_recipients = expected_recipients&.map(&:downcase)&.to_set
           @on_payment_success = on_payment_success
+          @can_offer = can_offer
           @intents = {}
+        end
+
+        def can_offer?(request)
+          return true unless @can_offer
+
+          @can_offer.call(request)
         end
 
         # Create a credential to satisfy the given challenge.
@@ -257,7 +267,7 @@ module Mpp
       def self.tempo(intents:, account: nil, fee_payer: nil, chain_id: nil, rpc_url: nil,
         root_account: nil, currency: nil, recipient: nil, decimals: 6, client_id: nil,
         expected_recipients: nil, fee_payer_allowed_fee_tokens: nil, relay: nil,
-        on_payment_success: nil)
+        on_payment_success: nil, can_offer: nil)
         rpc_url ||= chain_id ? Defaults.rpc_url_for_chain(chain_id) : Defaults::RPC_URL
         currency ||= Defaults.default_currency_for_chain(chain_id)
 
@@ -280,7 +290,8 @@ module Mpp
           expected_recipients: expected_recipients,
           fee_payer_allowed_fee_tokens: fee_payer_allowed_fee_tokens,
           relay: Relay.resolve_optional(relay),
-          on_payment_success: on_payment_success
+          on_payment_success: on_payment_success,
+          can_offer: can_offer
         )
 
         intents.each_value do |intent|
