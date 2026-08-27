@@ -26,5 +26,7 @@ module Mpp
     sig { returns(T.nilable(String)) }
     def opaque; end
 
+    sig { returns(T.nilable(String)) }
+    def header; end
   end
 end

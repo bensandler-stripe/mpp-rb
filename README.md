@@ -49,6 +49,18 @@ else
 end
 ```
 
+If the endpoint already uses `Authorization` (API keys, Bearer tokens), create the server with `requires_auth: true`. Challenges then advertise `header="Payment-Authorization"`, and clients send the Payment credential in that header instead of `Authorization`.
+
+```ruby
+server = Mpp.create(method: tempo, requires_auth: true)
+
+result = server.charge(
+  env["HTTP_AUTHORIZATION"],
+  "0.50",
+  payment_authorization: env["HTTP_PAYMENT_AUTHORIZATION"],
+)
+```
+
 ### Multiple methods
 
 ```ruby
@@ -62,6 +74,7 @@ paid = server.compose(
 
 result = paid.call(
   authorization: env["HTTP_AUTHORIZATION"],
+  payment_authorization: env["HTTP_PAYMENT_AUTHORIZATION"],
   payment_signature: env["HTTP_PAYMENT_SIGNATURE"],
   accept_payment: env["HTTP_ACCEPT_PAYMENT"],
   url: request.url,

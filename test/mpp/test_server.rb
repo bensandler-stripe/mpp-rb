@@ -636,7 +636,53 @@ class TestMppHandler < Minitest::Test
     assert_equal 0, calls
   end
 
+  def test_requires_auth_advertises_payment_authorization_header
+    handler = requires_auth_handler
+    result = handler.charge("Bearer app-token", "0.50")
+
+    assert_instance_of Mpp::Challenge, result
+    assert_equal Mpp::PAYMENT_AUTHORIZATION_HEADER, result.header
+    www = handler.challenge_response(result)["headers"]["WWW-Authenticate"]
+    assert_includes www, %(header="#{Mpp::PAYMENT_AUTHORIZATION_HEADER}")
+    assert_includes handler.challenge_response(result)["headers"]["Vary"], Mpp::PAYMENT_AUTHORIZATION_HEADER
+  end
+
+  def test_requires_auth_verifies_payment_authorization_and_ignores_bearer
+    handler = requires_auth_handler
+    challenge = handler.charge("Bearer app-token", "0.50")
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test"}
+    )
+
+    ignored = handler.charge(credential.to_authorization, "0.50")
+    assert_instance_of Mpp::Challenge, ignored
+
+    paid = handler.charge(
+      "Bearer app-token",
+      "0.50",
+      payment_authorization: credential.to_authorization
+    )
+    assert_instance_of Array, paid
+    assert_equal "success", paid.last.status
+  end
+
   private
+
+  def requires_auth_handler
+    intent = MockIntent.new
+    method = MockMethod.new(
+      intents: {"charge" => intent},
+      currency: Mpp::Methods::Tempo::Defaults::PATH_USD,
+      recipient: "0x#{"0" * 39}1"
+    )
+    Mpp::Server::MppHandler.new(
+      method: method,
+      realm: "api.example.com",
+      secret_key: "test-secret",
+      requires_auth: true
+    )
+  end
 
   def payment_method(on_payment_success: nil)
     MockMethod.new(

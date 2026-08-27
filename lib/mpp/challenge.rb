@@ -16,16 +16,30 @@ module Mpp
     :digest,
     :expires,
     :description,
-    :opaque
+    :opaque,
+    :header
   ) do
     def initialize(id:, method:, intent:, request:, realm: "", request_b64: "", digest: nil, expires: nil,
-      description: nil, opaque: nil)
-      super
+      description: nil, opaque: nil, header: nil)
+      super(
+        id: id,
+        method: method,
+        intent: intent,
+        request: request,
+        realm: realm,
+        request_b64: request_b64,
+        digest: digest,
+        expires: expires,
+        description: description,
+        opaque: opaque,
+        header: Mpp.advertised_credential_header(header)
+      )
     end
 
     # Create a Challenge with an HMAC-bound ID.
     def self.create(secret_key:, realm:, method:, intent:, request:, expires: nil, digest: nil, description: nil,
-      meta: nil)
+      meta: nil, header: nil)
+      header = Mpp.advertised_credential_header(header)
       challenge_id = Mpp.generate_challenge_id(
         secret_key: secret_key,
         realm: realm,
@@ -34,7 +48,8 @@ module Mpp
         request: request,
         expires: expires,
         digest: digest,
-        opaque: meta
+        opaque: meta,
+        header: header
       )
       request_json = Mpp::Json.compact_encode(request)
       request_b64 = Mpp.b64url_encode(request_json)
@@ -49,7 +64,8 @@ module Mpp
         digest: digest,
         expires: expires,
         description: description,
-        opaque: meta
+        opaque: meta,
+        header: header
       )
     end
 
@@ -152,6 +168,11 @@ module Mpp
       Mpp::Parsing.format_www_authenticate(self, realm)
     end
 
+    # HTTP field a client must use for the payment credential.
+    def credential_header
+      header || Mpp::AUTHORIZATION_HEADER
+    end
+
     # Verify the challenge ID matches the expected HMAC.
     def verify(secret_key, realm)
       expected_id = Mpp.generate_challenge_id(
@@ -162,7 +183,8 @@ module Mpp
         request: request,
         expires: expires,
         digest: digest,
-        opaque: opaque
+        opaque: opaque,
+        header: header
       )
       Mpp.secure_compare(id, expected_id)
     end
@@ -183,7 +205,8 @@ module Mpp
         request: request_b64,
         expires: expires,
         digest: digest,
-        opaque: opaque_b64
+        opaque: opaque_b64,
+        header: header
       )
     end
   end

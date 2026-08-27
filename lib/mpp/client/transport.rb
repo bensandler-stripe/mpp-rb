@@ -117,7 +117,7 @@ module Mpp
           raise
         end
 
-        retry_headers = headers.merge("Authorization" => auth_header)
+        retry_headers = headers.merge(challenge.credential_header => auth_header)
         payment_response = nil
         begin
           payment_response = send_request(uri, method, retry_headers, body)

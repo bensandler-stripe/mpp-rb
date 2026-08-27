@@ -393,3 +393,54 @@ class TestOpaque < Minitest::Test
     assert challenge.verify("my-secret", "api.example.com")
   end
 end
+
+class TestCredentialHeader < Minitest::Test
+  def test_authorization_header_does_not_change_challenge_id
+    params = {
+      secret_key: "test-secret-key-12345",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"}
+    }
+    implicit = Mpp::Challenge.create(**params)
+    explicit = Mpp::Challenge.create(**params, header: Mpp::AUTHORIZATION_HEADER)
+
+    assert_nil implicit.header
+    assert_nil explicit.header
+    assert_equal implicit.id, explicit.id
+    refute_includes implicit.to_www_authenticate("api.example.com"), "header="
+    assert_equal Mpp::AUTHORIZATION_HEADER, implicit.credential_header
+  end
+
+  def test_payment_authorization_header_is_bound_into_id
+    params = {
+      secret_key: "test-secret-key-12345",
+      realm: "api.example.com",
+      method: "tempo",
+      intent: "charge",
+      request: {"amount" => "1000000"}
+    }
+    implicit = Mpp::Challenge.create(**params)
+    advertised = Mpp::Challenge.create(**params, header: Mpp::PAYMENT_AUTHORIZATION_HEADER)
+
+    refute_equal implicit.id, advertised.id
+    assert_equal Mpp::PAYMENT_AUTHORIZATION_HEADER, advertised.header
+    assert advertised.verify("test-secret-key-12345", "api.example.com")
+    assert_includes advertised.to_www_authenticate("api.example.com"),
+      %(header="#{Mpp::PAYMENT_AUTHORIZATION_HEADER}")
+  end
+
+  def test_rejects_invalid_header_name
+    assert_raises(ArgumentError) do
+      Mpp::Challenge.create(
+        secret_key: "test-secret",
+        realm: "api.example.com",
+        method: "tempo",
+        intent: "charge",
+        request: {"amount" => "1000000"},
+        header: "Payment Authorization"
+      )
+    end
+  end
+end

@@ -101,6 +101,12 @@ module Mpp
       opaque_b64 = params["opaque"]
       opaque = (opaque_b64 && !opaque_b64.empty?) ? b64_decode(opaque_b64) : nil
 
+      header = begin
+        Mpp.advertised_credential_header(params["header"])
+      rescue ArgumentError => e
+        Kernel.raise Mpp::ParseError, e.message
+      end
+
       Mpp::Challenge.new(
         id: id,
         method: method,
@@ -111,7 +117,8 @@ module Mpp
         digest: params["digest"],
         expires: params["expires"],
         description: params["description"],
-        opaque: opaque
+        opaque: opaque,
+        header: header
       )
     end
 
@@ -131,6 +138,9 @@ module Mpp
       parts << "digest=\"#{escape_quoted(challenge.digest)}\"" if challenge.digest
       parts << "expires=\"#{escape_quoted(challenge.expires)}\"" if challenge.expires
       parts << "description=\"#{escape_quoted(challenge.description)}\"" if challenge.description
+      if challenge.header
+        parts << "header=\"#{escape_quoted(challenge.header)}\""
+      end
       if challenge.opaque
         opaque_b64 = b64_encode(challenge.opaque)
         parts << "opaque=\"#{opaque_b64}\""
@@ -158,6 +168,12 @@ module Mpp
       method = challenge_data["method"]
       validate_payment_method_id(method)
 
+      header = begin
+        Mpp.advertised_credential_header(challenge_data["header"]&.to_s)
+      rescue ArgumentError => e
+        Kernel.raise Mpp::ParseError, e.message
+      end
+
       echo = Mpp::ChallengeEcho.new(
         id: challenge_data["id"].to_s,
         realm: (challenge_data["realm"] || "").to_s,
@@ -166,7 +182,8 @@ module Mpp
         request: (challenge_data["request"] || "").to_s,
         expires: challenge_data["expires"]&.to_s,
         digest: challenge_data["digest"]&.to_s,
-        opaque: challenge_data["opaque"]&.to_s
+        opaque: challenge_data["opaque"]&.to_s,
+        header: header
       )
 
       Mpp::Credential.new(
@@ -188,6 +205,7 @@ module Mpp
       }
       challenge_dict["expires"] = credential.challenge.expires if credential.challenge.expires
       challenge_dict["digest"] = credential.challenge.digest if credential.challenge.digest
+      challenge_dict["header"] = credential.challenge.header if credential.challenge.header
       challenge_dict["opaque"] = credential.challenge.opaque if credential.challenge.opaque
 
       payload = {

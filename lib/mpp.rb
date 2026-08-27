@@ -11,6 +11,9 @@ require_relative "mpp/secure_compare"
 module Mpp
   extend T::Sig
 
+  AUTHORIZATION_HEADER = T.let("Authorization", String)
+  PAYMENT_AUTHORIZATION_HEADER = T.let("Payment-Authorization", String)
+
   autoload :Challenge, "mpp/challenge"
   autoload :ChallengeEcho, "mpp/challenge_echo"
   autoload :Credential, "mpp/credential"
@@ -43,9 +46,16 @@ module Mpp
     autoload :MCP, "mpp/extensions/mcp"
   end
 
-  sig { params(method: T.untyped, methods: T.nilable(T::Array[T.untyped]), realm: T.untyped, secret_key: T.untyped, events: T.nilable(Mpp::Events::Dispatcher)).returns(T.untyped) }
-  def self.create(method: nil, methods: nil, realm: nil, secret_key: nil, events: nil)
-    Server::MppHandler.create(method: method, methods: methods, realm: realm, secret_key: secret_key, events: events)
+  sig { params(method: T.untyped, methods: T.nilable(T::Array[T.untyped]), realm: T.untyped, secret_key: T.untyped, events: T.nilable(Mpp::Events::Dispatcher), requires_auth: T::Boolean).returns(T.untyped) }
+  def self.create(method: nil, methods: nil, realm: nil, secret_key: nil, events: nil, requires_auth: false)
+    Server::MppHandler.create(
+      method: method,
+      methods: methods,
+      realm: realm,
+      secret_key: secret_key,
+      events: events,
+      requires_auth: requires_auth
+    )
   end
 
   # Error hierarchy

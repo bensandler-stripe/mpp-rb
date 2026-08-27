@@ -32,6 +32,12 @@ module Mpp
     sig { returns(T.nilable(T::Hash[String, T.untyped])) }
     def opaque; end
 
+    sig { returns(T.nilable(String)) }
+    def header; end
+
+    sig { returns(String) }
+    def credential_header; end
+
     sig do
       params(
         id: String,
@@ -43,10 +49,11 @@ module Mpp
         digest: T.nilable(String),
         expires: T.nilable(String),
         description: T.nilable(String),
-        opaque: T.nilable(T::Hash[String, T.untyped])
+        opaque: T.nilable(T::Hash[String, T.untyped]),
+        header: T.nilable(String)
       ).void
     end
-    def initialize(id:, method:, intent:, request:, realm: "", request_b64: "", digest: nil, expires: nil, description: nil, opaque: nil); end
+    def initialize(id:, method:, intent:, request:, realm: "", request_b64: "", digest: nil, expires: nil, description: nil, opaque: nil, header: nil); end
 
     sig do
       params(
@@ -58,10 +65,11 @@ module Mpp
         expires: T.nilable(String),
         digest: T.nilable(String),
         description: T.nilable(String),
-        meta: T.nilable(T::Hash[String, T.untyped])
+        meta: T.nilable(T::Hash[String, T.untyped]),
+        header: T.nilable(String)
       ).returns(Challenge)
     end
-    def self.create(secret_key:, realm:, method:, intent:, request:, expires: nil, digest: nil, description: nil, meta: nil); end
+    def self.create(secret_key:, realm:, method:, intent:, request:, expires: nil, digest: nil, description: nil, meta: nil, header: nil); end
 
     sig { params(header: String).returns(Challenge) }
     def self.from_www_authenticate(header); end

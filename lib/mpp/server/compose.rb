@@ -104,7 +104,7 @@ module Mpp
         @options[:amount].to_s
       end
 
-      REQUEST_OPTION_KEYS = [:body, :url, :payment_signature, :accept_payment, :authorization, :http_method].freeze
+      REQUEST_OPTION_KEYS = [:body, :url, :payment_signature, :accept_payment, :authorization, :http_method, :payment_authorization].freeze
 
       sig { returns(T::Hash[Symbol, T.untyped]) }
       def charge_kwargs
@@ -163,6 +163,7 @@ module Mpp
       sig do
         params(
           authorization: T.nilable(String),
+          payment_authorization: T.nilable(String),
           payment_signature: T.nilable(String),
           body: T.untyped,
           url: T.nilable(String),
@@ -171,10 +172,11 @@ module Mpp
           scope: T.nilable(T::Hash[String, String])
         ).returns(ComposedResult)
       end
-      def call(authorization: nil, payment_signature: nil, body: nil, url: nil, accept_payment: nil, http_method: nil, scope: nil)
+      def call(authorization: nil, payment_authorization: nil, payment_signature: nil, body: nil, url: nil, accept_payment: nil, http_method: nil, scope: nil)
         if scope && !scope.empty?
           return self.class.new(handler: @handler, offers: @offers.map { |offer| offer.with_scope(scope) }).call(
             authorization: authorization,
+            payment_authorization: payment_authorization,
             payment_signature: payment_signature,
             body: body,
             url: url,
@@ -183,8 +185,9 @@ module Mpp
           )
         end
 
+        credential = @handler.payment_credential_value(authorization, payment_authorization)
         dispatched = dispatch_credential(
-          authorization: authorization,
+          authorization: credential,
           payment_signature: payment_signature,
           body: body,
           url: url,

@@ -10,7 +10,7 @@ module Mpp
     class MppHandler
       extend T::Sig
 
-      REQUEST_OPTION_KEYS = [:body, :url, :payment_signature, :accept_payment, :http_method].freeze
+      REQUEST_OPTION_KEYS = [:body, :url, :payment_signature, :accept_payment, :http_method, :payment_authorization].freeze
 
       sig { returns(T.untyped) }
       attr_reader :method
@@ -27,6 +27,12 @@ module Mpp
       sig { returns(T::Hash[String, T.untyped]) }
       attr_reader :defaults
 
+      sig { returns(T::Boolean) }
+      attr_reader :requires_auth
+
+      sig { returns(T.nilable(String)) }
+      attr_reader :credential_header
+
       sig do
         params(
           realm: String,
@@ -34,10 +40,11 @@ module Mpp
           method: T.untyped,
           methods: T.nilable(T::Array[T.untyped]),
           defaults: T.nilable(T::Hash[String, T.untyped]),
-          events: T.nilable(Mpp::Events::Dispatcher)
+          events: T.nilable(Mpp::Events::Dispatcher),
+          requires_auth: T::Boolean
         ).void
       end
-      def initialize(realm:, secret_key:, method: nil, methods: nil, defaults: nil, events: nil)
+      def initialize(realm:, secret_key:, method: nil, methods: nil, defaults: nil, events: nil, requires_auth: false)
         @methods = T.let(normalize_methods(method, methods), T::Array[T.untyped])
         @method = T.let(@methods.first, T.untyped)
         @realm = T.let(realm, String)
@@ -45,6 +52,8 @@ module Mpp
         @defaults = T.let(defaults || {}, T::Hash[String, T.untyped])
         @events = T.let(events || Mpp::Events.server_dispatcher, Mpp::Events::Dispatcher)
         @method_hook_events = T.let(Mpp::Events.server_dispatcher, Mpp::Events::Dispatcher)
+        @requires_auth = T.let(requires_auth, T::Boolean)
+        @credential_header = T.let(requires_auth ? Mpp::PAYMENT_AUTHORIZATION_HEADER : nil, T.nilable(String))
         register_method_payment_success
       end
 
@@ -55,16 +64,18 @@ module Mpp
           methods: T.nilable(T::Array[T.untyped]),
           realm: T.untyped,
           secret_key: T.untyped,
-          events: T.nilable(Mpp::Events::Dispatcher)
+          events: T.nilable(Mpp::Events::Dispatcher),
+          requires_auth: T::Boolean
         ).returns(T.attached_class)
       end
-      def self.create(method: nil, methods: nil, realm: nil, secret_key: nil, events: nil)
+      def self.create(method: nil, methods: nil, realm: nil, secret_key: nil, events: nil, requires_auth: false)
         new(
           method: method,
           methods: methods,
           realm: realm || Defaults.detect_realm,
           secret_key: secret_key || Defaults.detect_secret_key,
-          events: events
+          events: events,
+          requires_auth: requires_auth
         )
       end
 
@@ -86,6 +97,14 @@ module Mpp
       sig { params(handler: T.untyped, block: T.nilable(T.proc.params(payload: T.untyped).returns(T.untyped))).returns(T.proc.void) }
       def on_payment_success(handler = nil, &block)
         on(Mpp::Events::PAYMENT_SUCCESS, handler, &block)
+      end
+
+      # Select the HTTP header value that carries the Payment credential.
+      # When requires_auth is true, Payment credentials ride in
+      # Payment-Authorization so Authorization can hold application auth.
+      sig { params(authorization: T.nilable(String), payment_authorization: T.nilable(String)).returns(T.nilable(String)) }
+      def payment_credential_value(authorization, payment_authorization = nil)
+        @requires_auth ? payment_authorization : authorization
       end
 
       # Combine method offers into a single callable that presents every method.
@@ -121,11 +140,12 @@ module Mpp
 
         request_opts = kwargs.slice(*REQUEST_OPTION_KEYS)
         offer_opts = kwargs.except(*REQUEST_OPTION_KEYS)
+        payment = payment_credential_value(authorization, request_opts[:payment_authorization])
 
         if charge_methods.length == 1
           return charge_one(
             charge_methods.first,
-            authorization,
+            payment,
             amount,
             **request_opts,
             **offer_opts
@@ -135,6 +155,7 @@ module Mpp
         entries = charge_methods.map { |candidate| [candidate, offer_opts.merge(amount: amount)] }
         ComposedHandler.from_entries(self, entries).call(
           authorization: authorization,
+          payment_authorization: request_opts[:payment_authorization],
           payment_signature: request_opts[:payment_signature],
           body: request_opts[:body],
           url: request_opts[:url],
@@ -183,7 +204,8 @@ module Mpp
           expires: offer_opts[:expires],
           events: @events,
           method_hook_events: @method_hook_events,
-          body: body
+          body: body,
+          header: @credential_header
         )
       end
 
@@ -310,7 +332,8 @@ module Mpp
           description,
           nil,
           expires,
-          body
+          body,
+          @credential_header
         )
         method_context = {name: method.name, intent: intent.name}
 

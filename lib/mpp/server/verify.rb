@@ -15,9 +15,9 @@ module Mpp
       # Verify a payment credential or generate a new challenge.
       #
       # Returns Challenge (payment required) or [Credential, Receipt] (verified).
-      sig { params(authorization: T.nilable(String), intent: T.untyped, request: T::Hash[String, T.untyped], realm: String, secret_key: String, method: T.nilable(String), description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String), events: T.nilable(Mpp::Events::Dispatcher), method_hook_events: T.nilable(Mpp::Events::Dispatcher), body: T.untyped).returns(T.untyped) }
+      sig { params(authorization: T.nilable(String), intent: T.untyped, request: T::Hash[String, T.untyped], realm: String, secret_key: String, method: T.nilable(String), description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String), events: T.nilable(Mpp::Events::Dispatcher), method_hook_events: T.nilable(Mpp::Events::Dispatcher), body: T.untyped, header: T.nilable(String)).returns(T.untyped) }
       def verify_or_challenge(authorization:, intent:, request:, realm:, secret_key:,
-        method: nil, description: nil, meta: nil, expires: nil, events: nil, method_hook_events: nil, body: nil)
+        method: nil, description: nil, meta: nil, expires: nil, events: nil, method_hook_events: nil, body: nil, header: nil)
         method_name = method || "tempo"
         request = Mpp::Units.transform_units(request)
         dispatcher = events
@@ -25,7 +25,7 @@ module Mpp
         method_context = events_enabled ? {name: method_name, intent: intent.name} : nil
 
         new_challenge = Kernel.lambda { |credential = nil, error = nil, submitted_challenge = nil|
-          challenge = create_challenge(method_name, intent.name, request, realm, secret_key, description, meta, expires, body)
+          challenge = create_challenge(method_name, intent.name, request, realm, secret_key, description, meta, expires, body, header)
           if error && dispatcher&.has_handlers?(Mpp::Events::PAYMENT_FAILED)
             emit_payment_failed(
               dispatcher: dispatcher,
@@ -79,7 +79,8 @@ module Mpp
           request: echo_request,
           expires: echo.expires,
           digest: echo.digest,
-          opaque: echo_opaque
+          opaque: echo_opaque,
+          header: echo.header
         )
         unless Mpp.secure_compare(echo.id, expected_id)
           return new_challenge.call(
@@ -186,9 +187,9 @@ module Mpp
         [credential, receipt]
       end
 
-      sig { params(method: String, intent_name: String, request: T::Hash[String, T.untyped], realm: String, secret_key: String, description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String), body: T.untyped).returns(Mpp::Challenge) }
+      sig { params(method: String, intent_name: String, request: T::Hash[String, T.untyped], realm: String, secret_key: String, description: T.nilable(String), meta: T.nilable(T::Hash[String, T.untyped]), expires: T.nilable(String), body: T.untyped, header: T.nilable(String)).returns(Mpp::Challenge) }
       def create_challenge(method, intent_name, request, realm, secret_key,
-        description = nil, meta = nil, expires = nil, body = nil)
+        description = nil, meta = nil, expires = nil, body = nil, header = nil)
         expires = nil if expires && !expires.is_a?(String)
 
         if expires.nil?
@@ -206,7 +207,8 @@ module Mpp
           expires: expires,
           digest: digest,
           description: description,
-          meta: meta
+          meta: meta,
+          header: header
         )
       end
 
