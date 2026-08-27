@@ -153,7 +153,7 @@ class TestMachinePayments < Minitest::Test
     assert_equal [1, 1, 2], client.payment_intents.calls.map { |params, _options| params[:amount] }
   end
 
-  def test_crypto_recording_failure_does_not_fail_the_payment
+  def test_crypto_recording_failures_are_logged_without_failing_the_payment
     client = FakeStripeClient.new
     client.payment_intents.define_singleton_method(:create) { |_params, _options| raise "unavailable" }
     recorder = Mpp::Methods::Stripe::CryptoPaymentRecorder.new(client: client, network: "tempo")
@@ -161,6 +161,17 @@ class TestMachinePayments < Minitest::Test
     _stdout, stderr = capture_io { assert_nil recorder.call(success_payload("0xfailure")) }
 
     assert_includes stderr, "failed to record crypto payment"
+    assert_includes stderr, 'network="tempo"'
+    assert_includes stderr, 'transaction_hash="0xfailure"'
+    assert_includes stderr, "RuntimeError: unavailable"
+
+    receipt = Object.new
+    receipt.define_singleton_method(:reference) { raise "invalid receipt" }
+
+    _stdout, stderr = capture_io { assert_nil recorder.call({receipt: receipt}) }
+
+    assert_includes stderr, 'network="tempo"'
+    assert_includes stderr, "transaction_hash=nil"
   end
 
   def test_facade_requires_an_injected_client

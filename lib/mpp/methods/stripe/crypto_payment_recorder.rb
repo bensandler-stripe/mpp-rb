@@ -42,7 +42,10 @@ module Mpp
             {stripe_version: Defaults::MACHINE_PAYMENTS_API_VERSION, idempotency_key: reference}
           )
         rescue => error
-          Kernel.warn("[stripe] failed to record crypto payment: #{error.message}")
+          Kernel.warn(
+            "[stripe] failed to record crypto payment " \
+              "network=#{@network.inspect} transaction_hash=#{reference.inspect}: #{error.class}: #{error.message}"
+          )
           nil
         end
       end
