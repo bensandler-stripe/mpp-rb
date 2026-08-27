@@ -15,16 +15,19 @@ class MockIntent
 end
 
 class MockMethod
-  attr_reader :name, :intents, :currency, :recipient, :decimals, :chain_id, :fee_payer
+  attr_reader :name, :intents, :currency, :recipient, :decimals, :chain_id, :fee_payer,
+    :on_payment_success
 
-  def initialize(intents: {}, currency: nil, recipient: nil, decimals: 6, chain_id: nil, fee_payer: nil)
-    @name = "tempo"
+  def initialize(intents: {}, currency: nil, recipient: nil, decimals: 6, chain_id: nil,
+    fee_payer: nil, name: "tempo", on_payment_success: nil)
+    @name = name
     @intents = intents
     @currency = currency
     @recipient = recipient
     @decimals = decimals
     @chain_id = chain_id
     @fee_payer = fee_payer
+    @on_payment_success = on_payment_success
   end
 end
 
@@ -365,6 +368,9 @@ class TestServerVerify < Minitest::Test
 end
 
 class TestMppHandler < Minitest::Test
+  CURRENCY = "0x20c0000000000000000000000000000000000000"
+  RECIPIENT = "0x742d35Cc6634c0532925a3b844bC9e7595F8fE00"
+
   def test_charge_returns_challenge_without_auth
     intent = MockIntent.new
     method = MockMethod.new(
@@ -540,6 +546,96 @@ class TestMppHandler < Minitest::Test
     assert_instance_of Mpp::Challenge, result
   end
 
+  def test_method_payment_success_hook_preserves_global_observers
+    seen = []
+    method = payment_method(on_payment_success: ->(payload) { seen << [:method, payload] })
+    events = Mpp::Events.server_dispatcher
+    events.on(Mpp::Events::PAYMENT_SUCCESS) { |payload| seen << [:global, payload] }
+    handler = payment_handler(method, events: events)
+
+    result = pay(handler)
+
+    assert_instance_of Array, result
+    assert_equal [:global, :method], seen.map(&:first).sort
+    seen.each do |_kind, payload|
+      assert_equal({name: "tempo", intent: "charge"}, payload[:method])
+      assert_equal "success", payload[:receipt].status
+    end
+    assert_same seen.find { |kind, _payload| kind == :global }.last,
+      seen.find { |kind, _payload| kind == :method }.last
+  end
+
+  def test_method_payment_success_hook_matches_the_intent_name_not_its_registry_key
+    seen = []
+    intent = MockIntent.new(name: "pay")
+    method = MockMethod.new(
+      intents: {"charge" => intent},
+      currency: CURRENCY,
+      recipient: RECIPIENT,
+      on_payment_success: ->(payload) { seen << payload }
+    )
+
+    pay(payment_handler(method))
+
+    assert_equal 1, seen.length
+    assert_equal({name: "tempo", intent: "pay"}, seen.first[:method])
+  end
+
+  def test_method_payment_success_hooks_are_isolated_per_handler_with_a_shared_dispatcher
+    seen = []
+    events = Mpp::Events.server_dispatcher
+    first = payment_method(on_payment_success: ->(_payload) { seen << :first })
+    second = payment_method(on_payment_success: ->(_payload) { seen << :second })
+    first_handler = payment_handler(first, events: events)
+    payment_handler(second, events: events)
+
+    pay(first_handler)
+
+    assert_equal [:first], seen
+
+    reused = payment_method(on_payment_success: ->(_payload) { seen << :reused })
+    first_handler = payment_handler(reused, events: events)
+    payment_handler(reused, events: events)
+
+    pay(first_handler)
+
+    assert_equal [:first, :reused], seen
+  end
+
+  def test_method_payment_success_hook_errors_do_not_stop_payment
+    method = payment_method(on_payment_success: ->(_payload) { raise "hook failed" })
+    handler = payment_handler(method)
+
+    result = pay(handler)
+
+    assert_instance_of Array, result
+    assert_equal "success", result.last.status
+  end
+
+  def test_method_payment_success_hook_does_not_run_when_verification_fails
+    calls = 0
+    intent = Mpp::Server::FunctionalIntent.new("charge") do |_credential, _request|
+      raise Mpp::VerificationError, "payment failed"
+    end
+    method = MockMethod.new(
+      intents: {"charge" => intent},
+      currency: CURRENCY,
+      recipient: RECIPIENT,
+      on_payment_success: ->(_payload) { calls += 1 }
+    )
+    handler = payment_handler(method)
+    challenge = handler.charge(nil, "0.50")
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test"}
+    )
+
+    assert_raises(Mpp::VerificationError) do
+      handler.charge(credential.to_authorization, "0.50")
+    end
+    assert_equal 0, calls
+  end
+
   def test_requires_auth_advertises_payment_authorization_header
     handler = requires_auth_handler
     result = handler.charge("Bearer app-token", "0.50")
@@ -586,6 +682,33 @@ class TestMppHandler < Minitest::Test
       secret_key: "test-secret",
       requires_auth: true
     )
+  end
+
+  def payment_method(on_payment_success: nil)
+    MockMethod.new(
+      intents: {"charge" => MockIntent.new},
+      currency: CURRENCY,
+      recipient: RECIPIENT,
+      on_payment_success: on_payment_success
+    )
+  end
+
+  def payment_handler(method, events: nil)
+    Mpp::Server::MppHandler.new(
+      method: method,
+      realm: "api.example.com",
+      secret_key: "test-secret",
+      events: events
+    )
+  end
+
+  def pay(handler)
+    challenge = handler.charge(nil, "0.50")
+    credential = Mpp::Credential.new(
+      challenge: challenge.to_echo,
+      payload: {"type" => "test"}
+    )
+    handler.charge(credential.to_authorization, "0.50")
   end
 end
 

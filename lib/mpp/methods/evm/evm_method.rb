@@ -6,10 +6,18 @@ module Mpp
     module Evm
       # EVM payment method. Speaks native Payment-auth and x402 exact.
       class EvmMethod
-        attr_reader :name, :currency, :recipient, :decimals, :chain_id, :authorization, :x402
+        attr_reader :name, :currency, :recipient, :decimals, :chain_id, :authorization, :x402,
+          :on_payment_success
         attr_accessor :intents
 
-        def initialize(currency:, recipient:, decimals:, chain_id:, authorization:, x402:)
+        def initialize(currency:, recipient:, decimals:, chain_id:, authorization:, x402:, on_payment_success: nil, can_offer: nil)
+          if !on_payment_success.nil? && !on_payment_success.respond_to?(:call)
+            raise ArgumentError, "on_payment_success must be callable"
+          end
+          if !can_offer.nil? && !can_offer.respond_to?(:call)
+            raise ArgumentError, "can_offer must be callable"
+          end
+
           @name = "evm"
           @currency = Authorization.checksum_address(currency)
           @recipient = Authorization.checksum_address(recipient)
@@ -17,7 +25,15 @@ module Mpp
           @chain_id = chain_id
           @authorization = authorization
           @x402 = x402
+          @on_payment_success = on_payment_success
+          @can_offer = can_offer
           @intents = {}
+        end
+
+        def can_offer?(request)
+          return true unless @can_offer
+
+          @can_offer.call(request)
         end
 
         def transform_request(request, _credential)

@@ -9,16 +9,23 @@ module Mpp
       # Stripe payment method implementation.
       # Handles SPT-based payments through Stripe's Business Network.
       class StripeMethod
-        attr_reader :name, :currency, :recipient, :decimals
+        attr_reader :name, :currency, :recipient, :decimals, :on_payment_success
         attr_accessor :intents
 
         def initialize(secret_key:, network_id:, payment_methods: nil,
           metadata: nil, currency: Defaults::DEFAULT_CURRENCY,
-          decimals: Defaults::DEFAULT_DECIMALS, external_id: nil)
+          decimals: Defaults::DEFAULT_DECIMALS, external_id: nil,
+          on_payment_success: nil, can_offer: nil)
           unless payment_methods.is_a?(Array) &&
               payment_methods.any? &&
               payment_methods.all? { |type| type.is_a?(String) && !type.strip.empty? }
             raise ArgumentError, "payment_methods must be a non-empty array of Stripe payment method type strings"
+          end
+          unless on_payment_success.nil? || on_payment_success.respond_to?(:call)
+            raise ArgumentError, "on_payment_success must be callable"
+          end
+          unless can_offer.nil? || can_offer.respond_to?(:call)
+            raise ArgumentError, "can_offer must be callable"
           end
 
           @name = "stripe"
@@ -27,10 +34,18 @@ module Mpp
           @payment_methods = payment_methods
           @metadata = metadata
           @external_id = external_id
+          @on_payment_success = on_payment_success
+          @can_offer = can_offer
           @currency = currency
           @recipient = network_id
           @decimals = decimals
           @intents = {}
+        end
+
+        def can_offer?(request)
+          return true unless @can_offer
+
+          @can_offer.call(request)
         end
 
         # Transform request - injects Stripe-specific methodDetails.
@@ -53,6 +68,8 @@ module Mpp
         metadata: nil, currency: Defaults::DEFAULT_CURRENCY,
         decimals: Defaults::DEFAULT_DECIMALS,
         external_id: nil,
+        on_payment_success: nil,
+        can_offer: nil,
         api_base: Defaults::STRIPE_API_BASE)
         charge_intent = ChargeIntent.new(secret_key: secret_key, api_base: api_base)
 
@@ -63,7 +80,9 @@ module Mpp
           metadata: metadata,
           currency: currency,
           decimals: decimals,
-          external_id: external_id
+          external_id: external_id,
+          on_payment_success: on_payment_success,
+          can_offer: can_offer
         )
 
         method.intents = {"charge" => charge_intent}

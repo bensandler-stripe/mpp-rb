@@ -7,6 +7,7 @@ module Mpp
     #   name       -> String
     #   intents    -> Hash[String, Intent]
     #   create_credential(challenge) -> Credential
+    #   on_payment_success -> optional callable receiving a payment.success payload
 
     module MethodHelper
       extend T::Sig
@@ -21,6 +22,20 @@ module Mpp
         else
           request
         end
+      end
+
+      # Check whether a method should be advertised for a canonical request.
+      # This only governs composing new 402 offers, never credential redemption.
+      sig { params(method: T.untyped, request: T::Hash[String, T.untyped]).returns(T::Boolean) }
+      def can_offer?(method, request)
+        return true unless method.respond_to?(:can_offer?)
+
+        available = method.can_offer?(request)
+        unless available == true || available == false
+          Kernel.raise ArgumentError, "can_offer? must return true or false"
+        end
+
+        available
       end
     end
   end

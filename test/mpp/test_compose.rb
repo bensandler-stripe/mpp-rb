@@ -28,6 +28,29 @@ class ComposeMockMethod
   end
 end
 
+class ComposeAvailableMethod < ComposeMockMethod
+  attr_accessor :available
+  attr_reader :can_offer_calls, :seen_request, :transform_calls
+
+  def initialize(available:, **kwargs)
+    super(**kwargs)
+    @available = available
+    @can_offer_calls = 0
+    @transform_calls = 0
+  end
+
+  def can_offer?(request)
+    @can_offer_calls += 1
+    @seen_request = request
+    @available.respond_to?(:call) ? @available.call(request) : @available
+  end
+
+  def transform_request(request, _credential)
+    @transform_calls += 1
+    request.merge("composeAvailability" => "checked")
+  end
+end
+
 class TestCompose < Minitest::Test
   SECRET = "test-compose-secret"
   REALM = "api.example.com"
@@ -140,6 +163,99 @@ class TestCompose < Minitest::Test
     ).call(accept_payment: "tempo/charge, stripe/charge;q=0")
 
     assert_equal ["tempo"], result.challenges.map(&:method)
+  end
+
+  def test_compose_only_advertises_available_offers_with_their_canonical_request
+    unavailable = ComposeAvailableMethod.new(
+      name: "tempo",
+      currency: TEMPO_CURRENCY,
+      recipient: RECIPIENT,
+      available: false
+    )
+    available = ComposeAvailableMethod.new(
+      name: "stripe",
+      currency: "usd",
+      recipient: "acct_123",
+      decimals: 2,
+      available: true
+    )
+    handler = Mpp::Server::MppHandler.new(methods: [unavailable, available], realm: REALM, secret_key: SECRET)
+
+    result = handler.compose(
+      [unavailable, {amount: "1.00"}],
+      [available, {amount: "1.00"}]
+    ).call
+
+    assert_equal ["stripe"], result.challenges.map(&:method)
+    assert_equal 1, unavailable.transform_calls
+    assert_equal 1, available.transform_calls
+    assert_same available.seen_request, result.challenges.first.request
+  end
+
+  def test_availability_does_not_block_issued_credentials_or_direct_charges
+    method = ComposeAvailableMethod.new(
+      name: "tempo",
+      currency: TEMPO_CURRENCY,
+      recipient: RECIPIENT,
+      available: true
+    )
+    handler = Mpp::Server::MppHandler.new(methods: [method], realm: REALM, secret_key: SECRET)
+    composed = handler.compose([method, {amount: "1.00"}])
+    challenge = composed.call.challenges.first
+    method.available = false
+    credential = Mpp::Credential.new(challenge: challenge.to_echo, payload: {"type" => "transaction"})
+
+    result = composed.call(authorization: credential.to_authorization)
+
+    refute result.payment_required?
+    assert_equal 1, method.can_offer_calls
+
+    direct = handler.charge(nil, "1.00")
+    assert_instance_of Mpp::Challenge, direct
+    assert_equal 1, method.can_offer_calls
+  end
+
+  def test_compose_rejects_when_no_offers_are_available
+    method = ComposeAvailableMethod.new(
+      name: "tempo",
+      currency: TEMPO_CURRENCY,
+      recipient: RECIPIENT,
+      available: false
+    )
+    handler = Mpp::Server::MppHandler.new(method: method, realm: REALM, secret_key: SECRET)
+
+    error = assert_raises(ArgumentError) { handler.compose([method, {amount: "1.00"}]).call }
+
+    assert_equal "No payment offers are available for this request", error.message
+  end
+
+  def test_compose_rejects_non_boolean_offer_availability
+    method = ComposeAvailableMethod.new(
+      name: "tempo",
+      currency: TEMPO_CURRENCY,
+      recipient: RECIPIENT,
+      available: "sometimes"
+    )
+    handler = Mpp::Server::MppHandler.new(method: method, realm: REALM, secret_key: SECRET)
+
+    error = assert_raises(ArgumentError) { handler.compose([method, {amount: "1.00"}]).call }
+
+    assert_equal "can_offer? must return true or false", error.message
+  end
+
+  def test_compose_propagates_offer_availability_errors
+    expected = RuntimeError.new("deposit address unavailable")
+    method = ComposeAvailableMethod.new(
+      name: "tempo",
+      currency: TEMPO_CURRENCY,
+      recipient: RECIPIENT,
+      available: ->(_request) { raise expected }
+    )
+    handler = Mpp::Server::MppHandler.new(method: method, realm: REALM, secret_key: SECRET)
+
+    error = assert_raises(RuntimeError) { handler.compose([method, {amount: "1.00"}]).call }
+
+    assert_same expected, error
   end
 
   def test_implicit_charge_compose_for_multiple_methods
